@@ -1,0 +1,33 @@
+[package]
+name = "mipcmanager_patch"
+version = "1.0.0"
+edition = "2024"
+description = "小米电脑管家 (MiPCManager) 功能增强补丁工具：原生 DLL 字符串补丁 + .NET 方法体重定位补丁"
+
+[[bin]]
+name = "mipcm_patch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+sysinfo = "0.37"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3.0.9"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
