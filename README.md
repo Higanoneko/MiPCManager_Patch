@@ -1,3 +1,4 @@
+![alt text](MiPCMPatcher.png)
 # MiPCManager Patcher
 
 为「小米电脑管家 (XiaomiPCManager)」提供功能增强与还原能力的补丁工具。
@@ -76,10 +77,10 @@ mipcm_patch device apply --model TM2424 | revert
 
 ## 注意事项
 
-- 打补丁前工具会按功能自动关闭对应进程，补丁后请手动重新打开小米电脑管家。
-- 地区伪装会关闭 `micont_service.exe`。
-- 摄像头弹窗和设备伪装会关闭 `XiaomiPcManager.exe`。
-- 音频流转会关闭 `MiPCAudio.exe`。
+- 工具启动时会先关闭所有探测到的小米电脑管家相关进程，补丁后请手动重新打开小米电脑管家。
+- 各补丁动作执行前仍会按功能关闭对应进程作为兜底：地区伪装关闭 `micont_service.exe`，摄像头弹窗和设备伪装关闭 `XiaomiPcManager.exe`，音频流转关闭 `MiPCAudio.exe` 与 `MAFSvr.exe`。
+- 地区伪装 Patch 前必须确保 `micont_service.exe` 已退出；若使用 `--no-kill` 且该进程仍在运行，工具会拒绝继续 Patch。
+- 所有 Patch/还原操作若遇到 `拒绝访问。 (os error 5)`，工具会自动关闭对应进程并重试一次。
 - 如需跳过运行时提权兜底，可设置环境变量 `MIPCM_NO_ELEVATE=1`；Release 版本的 exe 的 manifest 强制提权不会被该环境变量跳过。
 
 ## 技术说明
@@ -90,3 +91,9 @@ mipcm_patch device apply --model TM2424 | revert
 
 - @ChsBuffer 的 `msimg32.dll` 为本项目提供了 DLL 代理支持。
 - Coolapk@Na1veMagic 的技术思路为本项目的 `LocaleSpoof` 提供了重要参考。
+
+## 免责声明
+
+本工具所用所有图标（特指 assets/MiPCManager.ico）均归北京小米移动软件有限公司所有，受相关版权法律保护。未经授权，禁止任何形式的复制、分发、展示或使用这些图标。
+
+本工具仅供学习和研究使用，作者不对因使用本工具而导致的任何直接或间接损失承担责任。使用者应自行承担使用本工具的风险，并确保其行为符合当地法律法规。

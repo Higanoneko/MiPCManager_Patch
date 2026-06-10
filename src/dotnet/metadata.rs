@@ -119,7 +119,11 @@ impl<'a> Tables<'a> {
     /// 编码索引宽度。
     fn coded_w(&self, tables: &[usize], tag_bits: u32) -> usize {
         let max = tables.iter().map(|&t| self.rows(t)).max().unwrap_or(0);
-        if max as u64 > (1u64 << (16 - tag_bits)) { 4 } else { 2 }
+        if max as u64 > (1u64 << (16 - tag_bits)) {
+            4
+        } else {
+            2
+        }
     }
 
     fn row_size(&self, tbl: usize) -> Result<usize> {
@@ -130,19 +134,23 @@ impl<'a> Tables<'a> {
         let g = self.guid_w;
         let b = self.blob_w;
         Ok(match tbl {
-            0 => 2 + s + 3 * g,                                              // Module
-            1 => self.coded_w(RESOLUTION_SCOPE, 2) + 2 * s,                  // TypeRef
+            0 => 2 + s + 3 * g,                             // Module
+            1 => self.coded_w(RESOLUTION_SCOPE, 2) + 2 * s, // TypeRef
             2 => 4 + 2 * s + self.coded_w(TYPE_DEF_OR_REF, 2) + self.simple_w(4) + self.simple_w(6), // TypeDef
-            3 => self.simple_w(4),                                          // FieldPtr
-            4 => 2 + s + b,                                                 // Field
-            5 => self.simple_w(6),                                         // MethodPtr
-            6 => 4 + 2 + 2 + s + b + self.simple_w(8),                     // MethodDef
+            3 => self.simple_w(4),                     // FieldPtr
+            4 => 2 + s + b,                            // Field
+            5 => self.simple_w(6),                     // MethodPtr
+            6 => 4 + 2 + 2 + s + b + self.simple_w(8), // MethodDef
             other => bail!("未实现表 {other} 的行大小计算"),
         })
     }
 
     fn read_index(&self, o: usize, w: usize) -> u32 {
-        if w == 2 { rd_u16(self.data, o) as u32 } else { rd_u32(self.data, o) }
+        if w == 2 {
+            rd_u16(self.data, o) as u32
+        } else {
+            rd_u32(self.data, o)
+        }
     }
 
     fn get_string(&self, idx: u32) -> &str {
@@ -224,9 +232,8 @@ pub fn find_method(
             break;
         }
     }
-    let row0 = found.with_context(|| {
-        format!("类型 {type_simple_name} 中未找到方法 *{method_name_suffix}")
-    })?;
+    let row0 = found
+        .with_context(|| format!("类型 {type_simple_name} 中未找到方法 *{method_name_suffix}"))?;
 
     let rva_field_offset = t.method_rva_field_offset(row0);
     let body_rva = rd_u32(&pe.data, rva_field_offset);

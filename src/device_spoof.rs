@@ -1,11 +1,3 @@
-//! 任务 4：设备伪装（DeviceSpoof）。
-//!
-//! 原理：把一个代理版 `msimg32.dll` 放到 `XiaomiPcManager.exe` 同目录下（利用 DLL 搜索
-//! 顺序优先加载同目录的同名 DLL），它会读取注册表
-//! `HKCU\Software\SmartSharePatch\SpoofDevice` 的机型代号并据此伪装本机型号。
-//!
-//! 该 `msimg32.dll` 已内嵌进本程序，应用时直接释放到目标目录，无需额外文件。
-
 use crate::install;
 use anyhow::{Result, bail};
 use std::path::Path;

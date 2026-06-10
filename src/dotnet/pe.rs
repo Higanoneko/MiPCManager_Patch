@@ -209,7 +209,8 @@ impl PeImage {
         // 6) 更新节数量与 SizeOfImage。
         self.num_sections += 1;
         let new_count = self.num_sections as u16;
-        self.data[self.coff_offset + 2..self.coff_offset + 4].copy_from_slice(&new_count.to_le_bytes());
+        self.data[self.coff_offset + 2..self.coff_offset + 4]
+            .copy_from_slice(&new_count.to_le_bytes());
         let new_size_of_image = align_up(new_va + virtual_size, sect_align);
         self.set_opt_u32(opt::SIZE_OF_IMAGE, new_size_of_image);
 
@@ -247,7 +248,10 @@ impl PeImage {
     /// 定位 .NET 元数据根 (`BSJB`) 的文件偏移。
     pub fn metadata_root_offset(&self) -> Result<usize> {
         let (clr_rva, clr_size) = self.data_directory(dir::CLR);
-        ensure!(clr_rva != 0 && clr_size >= 0x48, "不是 .NET 程序集（无 CLR 头）");
+        ensure!(
+            clr_rva != 0 && clr_size >= 0x48,
+            "不是 .NET 程序集（无 CLR 头）"
+        );
         let cli = self
             .rva_to_offset(clr_rva)
             .context("CLR 头 RVA 无法映射到文件偏移")?;
@@ -256,7 +260,10 @@ impl PeImage {
         let moff = self
             .rva_to_offset(meta_rva)
             .context("元数据 RVA 无法映射到文件偏移")?;
-        ensure!(&self.data[moff..moff + 4] == b"BSJB", "元数据签名 BSJB 缺失");
+        ensure!(
+            &self.data[moff..moff + 4] == b"BSJB",
+            "元数据签名 BSJB 缺失"
+        );
         Ok(moff)
     }
 }

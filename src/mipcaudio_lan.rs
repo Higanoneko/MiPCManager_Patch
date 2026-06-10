@@ -1,21 +1,3 @@
-//! 任务 3：MiPCAudio 音频流转的「无线 / 有线」广播模式统一切换。
-//!
-//! 背景：设备身份（用作发现去重的 MAC）由「选取某张网卡的 MAC」决定。经反汇编确认，
-//! 选网卡的判定 `IfType == IF_TYPE_IEEE80211(0x47, WiFi)` 一共出现在 **三处**：
-//!   - `MiPCAudio.exe`（Lyra/netbus 的 `GetMacIp`，type8 身份）
-//!   - `idmruntime.dll`（IDM 的「get WiFi Adapter MAC」，type2 身份）
-//!   - `idmruntime.dll`（IDM 另一条取 MAC 路径）
-//!
-//! 设备同时通过 Lyra(type8) 与 IDM(type2) 两套机制发布。只要三处身份一致，手机就合并为
-//! 单设备；若只改其中一处（如旧版 txt 补丁），身份分歧 → 出现重复设备。
-//!
-//! 由于「自动跟随当前活跃出口网卡」需要遍历比较 `Ipv4Metric`，无法用等长字节替换实现，
-//! 这里采用更简单可靠的方案：**统一**把三处改成同一介质，交由用户按自己的接入方式选择：
-//!   - 无线模式：三处 = `0x47`（WiFi，等同原始出厂状态）
-//!   - 有线模式：三处 = `0x06`（IF_TYPE_ETHERNET_CSMACD，走有线 LAN）
-//!
-//! 定位采用「指令块特征（prefix + 值字节 + 后随 jne）」而非硬编码偏移，跨版本稳定。
-
 use crate::install;
 use anyhow::{Result, anyhow, bail};
 use std::collections::BTreeMap;

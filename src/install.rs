@@ -26,7 +26,8 @@ pub fn find_install_root() -> Option<PathBuf> {
 /// 在安装根目录下找出版本号最高的版本目录（形如 `5.8.0.14`）。
 pub fn latest_version_dir(root: &Path) -> Result<PathBuf> {
     let mut best: Option<(Vec<u64>, PathBuf)> = None;
-    for entry in fs::read_dir(root).with_context(|| format!("无法读取目录 {}", root.display()))? {
+    for entry in fs::read_dir(root).with_context(|| format!("无法读取目录 {}", root.display()))?
+    {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -51,30 +52,130 @@ fn parse_version(s: &str) -> Option<Vec<u64>> {
     if s.is_empty() {
         return None;
     }
-    let parts: Vec<u64> = s.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<_>>()?;
+    let parts: Vec<u64> = s
+        .split('.')
+        .map(|p| p.parse::<u64>().ok())
+        .collect::<Option<_>>()?;
     if parts.is_empty() { None } else { Some(parts) }
+}
+
+/// 关闭小米电脑管家相关进程。
+///
+/// 优先关闭安装目录内运行的进程，再用已知进程名兜底，避免版本更新新增子进程后漏关。
+#[cfg(windows)]
+pub fn kill_mipcmanager_processes(known_names: &[&str]) -> usize {
+    kill_processes(known_names, find_install_root().as_deref())
+}
+
+#[cfg(not(windows))]
+pub fn kill_mipcmanager_processes(_known_names: &[&str]) -> usize {
+    0
 }
 
 /// 按进程名（不含扩展名，大小写不敏感）结束进程。返回被结束的进程数。
 #[cfg(windows)]
 pub fn kill_by_names(names: &[&str]) -> usize {
+    kill_processes(names, None)
+}
+
+#[cfg(windows)]
+fn kill_processes(names: &[&str], install_root: Option<&Path>) -> usize {
     use sysinfo::System;
+
     let mut sys = System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let current_pid = sysinfo::get_current_pid().ok();
     let mut killed = 0;
     for proc in sys.processes().values() {
+        if Some(proc.pid()) == current_pid {
+            continue;
+        }
         let pname = proc.name().to_string_lossy();
         let stem = pname.strip_suffix(".exe").unwrap_or(&pname);
-        if names.iter().any(|n| n.eq_ignore_ascii_case(stem)) && proc.kill() {
+        let known_name = names.iter().any(|n| n.eq_ignore_ascii_case(stem));
+        let in_install_root = install_root
+            .and_then(|root| proc.exe().map(|exe| path_is_under(exe, root)))
+            .unwrap_or(false);
+        if (known_name || in_install_root) && proc.kill() {
             killed += 1;
         }
     }
     killed
 }
 
+#[cfg(windows)]
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    let path = normalize_process_path(path);
+    let root = normalize_process_path(root);
+    path == root || path.starts_with(&format!("{root}\\"))
+}
+
+#[cfg(windows)]
+fn normalize_process_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
 #[cfg(not(windows))]
 pub fn kill_by_names(_names: &[&str]) -> usize {
     0
+}
+
+/// 按进程名关闭并等待进程退出。返回关闭数量与最终仍在运行的进程名。
+#[cfg(windows)]
+pub fn kill_by_names_until_gone(
+    names: &[&str],
+    timeout: std::time::Duration,
+) -> (usize, Vec<String>) {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut killed = 0;
+    loop {
+        killed += kill_by_names(names);
+        let running = running_by_names(names);
+        if running.is_empty() || std::time::Instant::now() >= deadline {
+            return (killed, running);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+#[cfg(not(windows))]
+pub fn kill_by_names_until_gone(
+    _names: &[&str],
+    _timeout: std::time::Duration,
+) -> (usize, Vec<String>) {
+    (0, Vec::new())
+}
+
+/// 返回仍在运行的指定进程名（不含扩展名，大小写不敏感）。
+#[cfg(windows)]
+pub fn running_by_names(names: &[&str]) -> Vec<String> {
+    use sysinfo::System;
+
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let current_pid = sysinfo::get_current_pid().ok();
+    let mut running = Vec::new();
+    for proc in sys.processes().values() {
+        if Some(proc.pid()) == current_pid {
+            continue;
+        }
+        let pname = proc.name().to_string_lossy();
+        let stem = pname.strip_suffix(".exe").unwrap_or(&pname);
+        if names.iter().any(|n| n.eq_ignore_ascii_case(stem)) {
+            running.push(format!("{stem}.exe"));
+        }
+    }
+    running.sort();
+    running.dedup();
+    running
+}
+
+#[cfg(not(windows))]
+pub fn running_by_names(_names: &[&str]) -> Vec<String> {
+    Vec::new()
 }
 
 /// 为目标文件创建备份 `<file>.orig.bak`。若备份已存在则保留（视其为最初的原始文件）。

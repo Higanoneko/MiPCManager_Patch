@@ -13,9 +13,9 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
-sysinfo = "0.37"
-windows-sys = { version = "0.59", features = [
+winreg = "0.56"
+sysinfo = "0.39"
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Threading",

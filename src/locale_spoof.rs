@@ -1,12 +1,3 @@
-//! 任务 1：LocaleSpoof（地区伪装）。
-//!
-//! 原理：`micont_rtm.dll` 原本读取 `HKCU\Control Panel\International\Geo\Name`
-//! （系统真实地区）。补丁把它要读取的“值名”由宽字符串 `Name` 改为 `XCN`；再向同一
-//! 注册表键写入 `XCN=CN`。于是程序读到地区 `CN`，而系统真实 `Name` 保持不变。
-//!
-//! 该补丁为等长原地字节替换（`Name\0\0` 与 `XCN\0\0` 均为 10 字节），并以
-//! `...\Geo\0` 宽字符串作锚点定位，不依赖文件偏移，可适配未来版本。
-
 use crate::install;
 use anyhow::{Result, bail};
 use std::path::Path;
@@ -107,9 +98,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]

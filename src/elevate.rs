@@ -83,7 +83,7 @@ fn relaunch_elevated_and_exit() -> ! {
     };
     // ShellExecuteW 返回值 > 32 表示成功。
     if (r as isize) <= 32 {
-        eprintln!("\x1b[31m需要管理员权限，但提权被取消或失败。\x1b[0m");
+        eprintln!("需要管理员权限，但提权被取消或失败。");
         std::process::exit(1);
     }
     std::process::exit(0);

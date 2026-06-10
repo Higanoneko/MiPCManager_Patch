@@ -21,11 +21,39 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::{Write, stdin, stdout};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// 小米电脑管家相关进程（不含扩展名），用于启动时全量关闭的兜底匹配。
+const PROC_MIPCM_ALL: &[&str] = &[
+    "XiaomiPcManager",
+    "XiaomiPcHost",
+    "micont_service",
+    "MiPCAudio",
+    "MiDistributedCameraBroker",
+    "MiDistributedCameraBroker32",
+    "MiHygieneBroker",
+    "MiPlayCastService",
+    "MiScreenShare",
+    "MiSmartShareDevice",
+    "MiSmartShareHandoff",
+    "mistreamservice",
+    "PcClipboard",
+    "PcyybAssistant",
+    "XaAppStore",
+    "handoff_svc",
+    "dist_service",
+    "DistributedService",
+    "MAFSvr",
+    "MASFvr",
+    "OSDLauncher",
+    "OSDUtility",
+    "SambaServer",
+];
 
 /// 各功能在打补丁前需要关闭的进程（不含扩展名）。补丁后由用户手动重新打开。
 const PROC_LOCALE: &[&str] = &["micont_service"];
 const PROC_CAMERA: &[&str] = &["XiaomiPcManager"];
-const PROC_AUDIO: &[&str] = &["MiPCAudio"];
+const PROC_AUDIO: &[&str] = &["MiPCAudio", "MAFSvr", "MASFvr"];
 const PROC_DEVICE: &[&str] = &["XiaomiPcManager"];
 
 #[derive(Parser)]
@@ -149,6 +177,7 @@ impl From<ModeArg> for mipcaudio_lan::BroadcastMode {
 fn main() {
     // Release exe 通过 manifest 在启动前请求管理员权限；这里保留运行时兜底。
     elevate::ensure_elevated();
+    close_all_mipcmanager_apps_on_startup();
 
     let cli = Cli::parse();
     let result = match cli.command {
@@ -156,7 +185,7 @@ fn main() {
         None => interactive_menu(),
     };
     if let Err(e) = result {
-        eprintln!("\x1b[31m错误：{e:#}\x1b[0m");
+        eprintln!("错误：{e:#}");
         std::process::exit(1);
     }
 }
@@ -171,16 +200,20 @@ fn run(cmd: Command) -> Result<()> {
         } => match action {
             PatchAction::Apply { dll, no_kill } => {
                 let path = resolve_dll(dll, locale_spoof::TARGET_DLL)?;
-                close_apps(PROC_LOCALE, no_kill);
-                let out = locale_spoof::apply(&path, &region, !no_registry)?;
+                close_apps_required(PROC_LOCALE, no_kill)?;
+                let out = retry_patch_after_access_denied(PROC_LOCALE, || {
+                    locale_spoof::apply(&path, &region, !no_registry)
+                })?;
                 report_locale(out, &path, &region, !no_registry);
                 remind_restart();
                 Ok(())
             }
             PatchAction::Revert { dll, no_kill } => {
                 let path = resolve_dll(dll, locale_spoof::TARGET_DLL)?;
-                close_apps(PROC_LOCALE, no_kill);
-                locale_spoof::revert(&path, !no_registry)?;
+                close_apps_required(PROC_LOCALE, no_kill)?;
+                retry_patch_after_access_denied(PROC_LOCALE, || {
+                    locale_spoof::revert(&path, !no_registry)
+                })?;
                 println!("✓ 已还原地区伪装：{}", path.display());
                 remind_restart();
                 Ok(())
@@ -190,7 +223,8 @@ fn run(cmd: Command) -> Result<()> {
             PatchAction::Apply { dll, no_kill } => {
                 let path = resolve_dll(dll, camera_toast::TARGET_DLL)?;
                 close_apps(PROC_CAMERA, no_kill);
-                let out = camera_toast::apply(&path)?;
+                let out =
+                    retry_patch_after_access_denied(PROC_CAMERA, || camera_toast::apply(&path))?;
                 report_inject(out, &path);
                 remind_restart();
                 Ok(())
@@ -198,7 +232,7 @@ fn run(cmd: Command) -> Result<()> {
             PatchAction::Revert { dll, no_kill } => {
                 let path = resolve_dll(dll, camera_toast::TARGET_DLL)?;
                 close_apps(PROC_CAMERA, no_kill);
-                camera_toast::revert(&path)?;
+                retry_patch_after_access_denied(PROC_CAMERA, || camera_toast::revert(&path))?;
                 println!("✓ 已还原摄像头弹窗补丁：{}", path.display());
                 remind_restart();
                 Ok(())
@@ -209,7 +243,9 @@ fn run(cmd: Command) -> Result<()> {
                 let dir = resolve_version_dir_or(dir)?;
                 close_apps(PROC_AUDIO, no_kill);
                 let mode: mipcaudio_lan::BroadcastMode = mode.into();
-                let results = mipcaudio_lan::apply(&dir, mode)?;
+                let results = retry_patch_after_access_denied(PROC_AUDIO, || {
+                    mipcaudio_lan::apply(&dir, mode)
+                })?;
                 println!("✓ 音频流转广播模式已切换为：{}", mode.label());
                 for (file, o) in results {
                     println!("  {file}: 改写 {} 处, 已是目标 {} 处", o.patched, o.already);
@@ -221,7 +257,7 @@ fn run(cmd: Command) -> Result<()> {
             AudioAction::Revert { dir, no_kill } => {
                 let dir = resolve_version_dir_or(dir)?;
                 close_apps(PROC_AUDIO, no_kill);
-                mipcaudio_lan::revert(&dir)?;
+                retry_patch_after_access_denied(PROC_AUDIO, || mipcaudio_lan::revert(&dir))?;
                 println!("✓ 已还原音频流转补丁（MiPCAudio.exe / idmruntime.dll）");
                 remind_restart();
                 Ok(())
@@ -235,9 +271,13 @@ fn run(cmd: Command) -> Result<()> {
             } => {
                 let dir = resolve_version_dir_or(dir)?;
                 close_apps(PROC_DEVICE, no_kill);
-                device_spoof::apply(&dir, &model)?;
+                retry_patch_after_access_denied(PROC_DEVICE, || device_spoof::apply(&dir, &model))?;
                 println!("✓ 设备伪装已应用：机型 = {model}");
-                println!("  已释放 {} 至 {}", device_spoof::PROXY_DLL_NAME, dir.display());
+                println!(
+                    "  已释放 {} 至 {}",
+                    device_spoof::PROXY_DLL_NAME,
+                    dir.display()
+                );
                 println!("  注册表 HKCU\\Software\\SmartSharePatch\\SpoofDevice = {model}");
                 remind_restart();
                 Ok(())
@@ -245,7 +285,7 @@ fn run(cmd: Command) -> Result<()> {
             DeviceAction::Revert { dir, no_kill } => {
                 let dir = resolve_version_dir_or(dir)?;
                 close_apps(PROC_DEVICE, no_kill);
-                device_spoof::revert(&dir)?;
+                retry_patch_after_access_denied(PROC_DEVICE, || device_spoof::revert(&dir))?;
                 println!("✓ 已还原设备伪装（移除 msimg32.dll 与注册表机型）");
                 remind_restart();
                 Ok(())
@@ -296,8 +336,68 @@ fn close_apps(procs: &[&str], no_kill: bool) {
     }
 }
 
+/// 需要确保进程已经退出的补丁操作使用该函数；若仍在运行则拒绝继续 Patch。
+fn close_apps_required(procs: &[&str], no_kill: bool) -> Result<()> {
+    let (n, running) = if no_kill {
+        (0, install::running_by_names(procs))
+    } else {
+        install::kill_by_names_until_gone(procs, Duration::from_secs(5))
+    };
+    if n > 0 {
+        println!("已关闭 {n} 个相关进程：{}", procs.join(", "));
+    }
+    if !running.is_empty() {
+        bail!(
+            "补丁前必须关闭相关进程，但以下进程仍在运行：{}。请手动结束后重试。",
+            running.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// 文件被进程占用时，Windows 常返回 access denied；此时关闭对应进程并重试一次。
+fn retry_patch_after_access_denied<T, F>(procs: &[&str], mut patch: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    match patch() {
+        Ok(v) => Ok(v),
+        Err(e) if is_access_denied(&e) => {
+            println!(
+                "遇到拒绝访问，正在关闭相关进程后重试一次：{}",
+                procs.join(", ")
+            );
+            let (n, running) = install::kill_by_names_until_gone(procs, Duration::from_secs(5));
+            if n > 0 {
+                println!("已关闭 {n} 个相关进程：{}", procs.join(", "));
+            }
+            if !running.is_empty() {
+                println!("以下进程仍在运行，将按要求重试一次：{}", running.join(", "));
+            }
+            patch()
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn is_access_denied(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            io.kind() == std::io::ErrorKind::PermissionDenied || io.raw_os_error() == Some(5)
+        })
+    })
+}
+
+/// 启动时关闭所有小米电脑管家相关进程，避免文件占用或后台服务立刻拉起组件。
+fn close_all_mipcmanager_apps_on_startup() {
+    let n = install::kill_mipcmanager_processes(PROC_MIPCM_ALL);
+    if n > 0 {
+        println!("已关闭 {n} 个小米电脑管家相关进程。");
+    }
+}
+
 fn remind_restart() {
-    println!("\x1b[33m提示：补丁已完成，请手动重新启动小米电脑管家使其生效。\x1b[0m");
+    println!("提示：补丁已完成，请手动重新启动小米电脑管家使其生效。");
 }
 
 fn report_locale(out: locale_spoof::PatchOutcome, path: &Path, region: &str, reg: bool) {
@@ -435,7 +535,7 @@ fn menu_camera() {
 }
 
 fn menu_audio() {
-    println!("\n-- 音频流转增强（统一身份，消除重复设备）--");
+    println!("\n-- 音频流转增强--");
     println!("  1) 切换为【无线 WiFi】广播");
     println!("  2) 切换为【有线 LAN】广播");
     println!("  3) 还原");
@@ -550,6 +650,6 @@ fn read_choice() -> &'static str {
 /// 执行一个操作并在出错时打印红色错误（用于菜单，不中断循环）。
 fn run_logged(r: Result<()>) {
     if let Err(e) = r {
-        eprintln!("\x1b[31m错误：{e:#}\x1b[0m");
+        eprintln!("错误：{e:#}");
     }
 }

@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=resources/mipcm_patch.rc");
     println!("cargo:rerun-if-changed=resources/mipcm_patch.exe.manifest");
+    println!("cargo:rerun-if-changed=assets/MiPCManager.ico");
 
     // Cargo also builds the binary as a test harness during `cargo test`; embedding a
     // requireAdministrator manifest there would make ordinary test runs require UAC.
