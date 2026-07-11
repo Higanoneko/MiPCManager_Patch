@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -62,10 +62,14 @@ jobs:
           function Test-ReleaseOrTagExists([string] $tag) {
             gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
             if ($LASTEXITCODE -eq 0) {
+              $global:LASTEXITCODE = 0
               return $true
             }
             gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" *> $null
-            return $LASTEXITCODE -eq 0
+            $exists = $LASTEXITCODE -eq 0
+            # 不存在是正常的检查结果，不应让本步以 gh 的非零退出码结束。
+            $global:LASTEXITCODE = 0
+            return $exists
           }
 
           $releaseVersion = $baseVersion
