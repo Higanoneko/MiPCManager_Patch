@@ -122,4 +122,33 @@ mod tests {
         // 再次执行应识别为已打补丁
         assert_eq!(patch_bytes(&mut buf).unwrap(), PatchOutcome::AlreadyPatched);
     }
+
+    /// 用未入库的厂商 DLL 验证真实 PcContinuity 版本。
+    ///
+    /// 运行时设置 `MIPCM_PCC_FIXTURE` 为 `micont_rtm.dll` 路径，并加 `--ignored`。
+    #[test]
+    #[ignore = "requires MIPCM_PCC_FIXTURE pointing to a real PcContinuity micont_rtm.dll"]
+    fn patches_real_pc_continuity_fixture() {
+        let path = std::env::var_os("MIPCM_PCC_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("MIPCM_PCC_FIXTURE must point to micont_rtm.dll");
+        let original = std::fs::read(&path).expect("failed to read PcContinuity fixture");
+        let mut patched = original.clone();
+
+        assert_eq!(patch_bytes(&mut patched).unwrap(), PatchOutcome::Patched);
+        assert_eq!(patched.len(), original.len());
+        assert_eq!(
+            original
+                .iter()
+                .zip(&patched)
+                .filter(|(before, after)| before != after)
+                .count(),
+            4,
+            "PcContinuity 样本应只改写 Name -> XCN 的 4 个非零字节"
+        );
+        assert_eq!(
+            patch_bytes(&mut patched).unwrap(),
+            PatchOutcome::AlreadyPatched
+        );
+    }
 }

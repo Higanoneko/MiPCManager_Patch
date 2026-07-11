@@ -6,16 +6,27 @@ use std::path::{Path, PathBuf};
 
 /// 默认安装根目录。
 pub const DEFAULT_INSTALL_ROOT: &str = r"C:\Program Files\MI\XiaomiPCManager";
+/// 新版「互联互通」的默认安装根目录（暂时仅支持地区伪装）。
+pub const DEFAULT_PC_CONTINUITY_ROOT: &str = r"C:\Program Files\MI\PcContinuity";
 
 /// 探测安装根目录。
 pub fn find_install_root() -> Option<PathBuf> {
-    let default = PathBuf::from(DEFAULT_INSTALL_ROOT);
+    find_product_root(DEFAULT_INSTALL_ROOT, "XiaomiPCManager")
+}
+
+/// 探测新版 PcContinuity 安装根目录。
+pub fn find_pc_continuity_root() -> Option<PathBuf> {
+    find_product_root(DEFAULT_PC_CONTINUITY_ROOT, "PcContinuity")
+}
+
+fn find_product_root(default_root: &str, product_dir: &str) -> Option<PathBuf> {
+    let default = PathBuf::from(default_root);
     if default.is_dir() {
         return Some(default);
     }
-    // 退而求其次：%ProgramFiles%\MI\XiaomiPCManager
+    // 退而求其次：%ProgramFiles%\MI\<product_dir>
     if let Ok(pf) = std::env::var("ProgramFiles") {
-        let p = Path::new(&pf).join("MI").join("XiaomiPCManager");
+        let p = Path::new(&pf).join("MI").join(product_dir);
         if p.is_dir() {
             return Some(p);
         }
@@ -64,7 +75,12 @@ fn parse_version(s: &str) -> Option<Vec<u64>> {
 /// 优先关闭安装目录内运行的进程，再用已知进程名兜底，避免版本更新新增子进程后漏关。
 #[cfg(windows)]
 pub fn kill_mipcmanager_processes(known_names: &[&str]) -> usize {
-    kill_processes(known_names, find_install_root().as_deref())
+    let Some(install_root) = find_install_root() else {
+        return 0;
+    };
+    // 启动时全量关闭严格限定在 XiaomiPCManager 根目录，
+    // 避免两个产品共用 micont_service 等进程名时误伤 PcContinuity。
+    kill_processes(known_names, &[install_root], false)
 }
 
 #[cfg(not(windows))]
@@ -75,11 +91,15 @@ pub fn kill_mipcmanager_processes(_known_names: &[&str]) -> usize {
 /// 按进程名（不含扩展名，大小写不敏感）结束进程。返回被结束的进程数。
 #[cfg(windows)]
 pub fn kill_by_names(names: &[&str]) -> usize {
-    kill_processes(names, None)
+    kill_processes(names, &[], true)
 }
 
 #[cfg(windows)]
-fn kill_processes(names: &[&str], install_root: Option<&Path>) -> usize {
+fn kill_processes(
+    names: &[&str],
+    install_roots: &[PathBuf],
+    allow_global_name_match: bool,
+) -> usize {
     use sysinfo::System;
 
     let mut sys = System::new();
@@ -93,10 +113,10 @@ fn kill_processes(names: &[&str], install_root: Option<&Path>) -> usize {
         let pname = proc.name().to_string_lossy();
         let stem = pname.strip_suffix(".exe").unwrap_or(&pname);
         let known_name = names.iter().any(|n| n.eq_ignore_ascii_case(stem));
-        let in_install_root = install_root
-            .and_then(|root| proc.exe().map(|exe| path_is_under(exe, root)))
-            .unwrap_or(false);
-        if (known_name || in_install_root) && proc.kill() {
+        let in_install_root = proc
+            .exe()
+            .is_some_and(|exe| install_roots.iter().any(|root| path_is_under(exe, root)));
+        if (in_install_root || allow_global_name_match && known_name) && proc.kill() {
             killed += 1;
         }
     }

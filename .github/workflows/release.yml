@@ -1,0 +1,167 @@
+name: Build and publish Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+      - src/**
+      - resources/**
+      - assets/**
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build Windows release and publish GitHub Release
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $cargoToml = Get-Content -Raw Cargo.toml
+          $package = [regex]::Match($cargoToml, '(?ms)^\[package\]\s*(.*?)(?=^\[|\z)')
+          if (-not $package.Success) {
+            throw 'Cargo.toml 中未找到 [package] 段落。'
+          }
+          $versionMatch = [regex]::Match($package.Groups[1].Value, '(?m)^\s*version\s*=\s*["'']([^"'']+)["'']')
+          if (-not $versionMatch.Success) {
+            throw 'Cargo.toml 的 [package] 中未找到 version。'
+          }
+
+          $baseVersion = $versionMatch.Groups[1].Value
+          if ($baseVersion -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
+            throw "当前工作流要求三段式版本号，实际为：$baseVersion"
+          }
+
+          function Test-ReleaseOrTagExists([string] $tag) {
+            gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -eq 0) {
+              return $true
+            }
+            gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" *> $null
+            return $LASTEXITCODE -eq 0
+          }
+
+          $releaseVersion = $baseVersion
+          while (Test-ReleaseOrTagExists "v$releaseVersion") {
+            $patch = [int64]$Matches.patch + 1
+            $releaseVersion = "{0}.{1}.{2}" -f $Matches.major, $Matches.minor, $patch
+            if ($releaseVersion -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
+              throw "无法递增版本号：$releaseVersion"
+            }
+          }
+
+          "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
+          "version=$releaseVersion" >> $env:GITHUB_OUTPUT
+          "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
+          Write-Host "Cargo.toml version: $baseVersion"
+          Write-Host "Release version:    $releaseVersion"
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Rename release binary
+        id: artifact
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'target\release\mipcm_patch.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "未找到 Release 产物：$source"
+          }
+          $artifact = Join-Path $env:GITHUB_WORKSPACE "MiPCManager_Patcher_$env:RELEASE_VERSION.exe"
+          Move-Item -LiteralPath $source -Destination $artifact -Force
+          "path=$artifact" >> $env:GITHUB_OUTPUT
+          Write-Host "Release asset: $artifact"
+
+      - name: Generate changelog
+        id: changelog
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $previousTag = gh release list --repo $env:GITHUB_REPOSITORY --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+          $previousTag = $previousTag | Select-Object -First 1
+          if ($previousTag) {
+            $previousTag = $previousTag.Trim()
+          } else {
+            $previousTag = ''
+          }
+
+          $lines = [System.Collections.Generic.List[string]]::new()
+          $lines.Add("## MiPCManager Patcher $env:RELEASE_VERSION")
+          $lines.Add('')
+          $lines.Add("- Cargo.toml 基础版本：$env:BASE_VERSION")
+          if ($env:BASE_VERSION -ne $env:RELEASE_VERSION) {
+            $lines.Add("- 由于 v$env:BASE_VERSION 已存在，本次顺延发布为 v$env:RELEASE_VERSION。")
+          }
+          $lines.Add('')
+          $lines.Add('### 更新日志')
+          $lines.Add('')
+
+          if ($previousTag -and $previousTag -ne $env:RELEASE_TAG) {
+            $commits = @(git log "$previousTag..HEAD" --pretty=format:'- %s (`%h`)' --no-merges)
+          } else {
+            $commits = @(git log -20 --pretty=format:'- %s (`%h`)' --no-merges)
+          }
+          if ($commits.Count -eq 0) {
+            $lines.Add('- 无可用提交记录。')
+          } else {
+            foreach ($commit in $commits) {
+              $lines.Add($commit)
+            }
+          }
+
+          Set-Content -LiteralPath $notesPath -Value $lines -Encoding utf8
+          "path=$notesPath" >> $env:GITHUB_OUTPUT
+          Get-Content -LiteralPath $notesPath
+
+      - name: Create GitHub Release and upload asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          ASSET_PATH: ${{ steps.artifact.outputs.path }}
+          NOTES_PATH: ${{ steps.changelog.outputs.path }}
+        run: |
+          gh release create $env:RELEASE_TAG $env:ASSET_PATH `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "MiPCManager Patcher $env:RELEASE_VERSION" `
+            --notes-file $env:NOTES_PATH
+
+          $releaseUrl = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json url --jq '.url'
+          Write-Host "Published: $releaseUrl"

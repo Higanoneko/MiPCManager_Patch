@@ -4,7 +4,7 @@
 
 ## 总体设计
 
-工具会自动探测小米电脑管家的最新安装版本，启动时关闭安装目录下的小米电脑管家相关进程，并在各补丁动作前按功能再次关闭对应进程作为兜底，备份原文件后再应用补丁。若 Patch/还原时遇到 access denied，会自动关闭对应进程并重试一次。所有补丁均幂等且可还原。
+工具会自动探测 `XiaomiPCManager` 与 `PcContinuity` 的最新安装版本。完整版 `XiaomiPCManager` 保留启动时全量关闭相关进程的行为；`PcContinuity` 不做全量关闭，只在 LocaleSpoof 动作前处理 `micont_service.exe`。各补丁动作前会按功能关闭对应进程，备份原文件后再应用补丁。`PcContinuity` 暂时只具有 LocaleSpoof 能力，其他功能的自动解析和显式路径都会拒绝该安装目录。若 Patch/还原时遇到 access denied，会自动关闭对应进程并重试一次。所有补丁均幂等且可还原。
 
 补丁定位采用「特征锚点 / 类型名+方法名 / 指令块特征」而非硬编码偏移，因此可适配未来版本。修改 `Program Files` 下文件需管理员权限，release exe 内嵌 `requireAdministrator` manifest，双击启动即弹 UAC，运行时仍保留提权兜底。
 
@@ -96,6 +96,12 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 代码：[`src/device_spoof.rs`](src/device_spoof.rs)
 
 > dll来源 @ChsBuffer
+
+## 安装小米电脑管家
+
+安装入口仅在未检测到 `PcContinuity` 时可用。工具优先扫描 Patcher 可执行文件同目录的 `*_XiaomiPCManager_*.exe`；也可接受本地 `.exe` 路径，或调用 Windows PowerShell `Invoke-WebRequest` 将 HTTP(S) URL 下载到该目录。URL 与目标路径通过子进程环境变量传入，不会拼接到 PowerShell 脚本中。下载先写入 `.download.tmp` 临时文件，成功后再重命名，避免保留不完整安装包。
+
+启动安装包前，复用 DeviceSpoof 的内嵌代理释放逻辑，将 `msimg32.dll` 写入安装包同目录。若目标已存在且内容不同，会先创建 `.orig.bak` 备份。
 
 ## 构建
 

@@ -6,6 +6,7 @@
 //!   camera apply|revert   抑制「请确认摄像头状态」弹窗（PcControlCenter.dll）
 //!   audio  apply|revert   音频流转无线/有线广播模式（MiPCAudio.exe + idmruntime.dll）
 //!   device apply|revert   设备伪装（释放 msimg32.dll + 注册表机型）
+//!   install           安装小米电脑管家（搜索/下载安装包并释放 msimg32.dll）
 //!
 //! 直接双击运行（无参数）时进入交互菜单。release exe 内嵌管理员权限 manifest，启动即触发 UAC。
 
@@ -16,6 +17,7 @@ mod elevate;
 mod install;
 mod locale_spoof;
 mod mipcaudio_lan;
+mod pc_manager_installer;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -92,6 +94,15 @@ enum Command {
     Device {
         #[command(subcommand)]
         action: DeviceAction,
+    },
+    /// 安装小米电脑管家（PcContinuity 存在时不可用）
+    Install {
+        /// 显式指定 .exe 安装包
+        #[arg(long, value_name = "EXE", conflicts_with = "url")]
+        installer: Option<PathBuf>,
+        /// 从 HTTP(S) 地址下载安装包
+        #[arg(long, value_name = "URL", conflicts_with = "installer")]
+        url: Option<String>,
     },
 }
 
@@ -199,7 +210,7 @@ fn run(cmd: Command) -> Result<()> {
             no_registry,
         } => match action {
             PatchAction::Apply { dll, no_kill } => {
-                let path = resolve_dll(dll, locale_spoof::TARGET_DLL)?;
+                let path = resolve_locale_dll(dll)?;
                 close_apps_required(PROC_LOCALE, no_kill)?;
                 let out = retry_patch_after_access_denied(PROC_LOCALE, || {
                     locale_spoof::apply(&path, &region, !no_registry)
@@ -209,7 +220,7 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
             PatchAction::Revert { dll, no_kill } => {
-                let path = resolve_dll(dll, locale_spoof::TARGET_DLL)?;
+                let path = resolve_locale_dll(dll)?;
                 close_apps_required(PROC_LOCALE, no_kill)?;
                 retry_patch_after_access_denied(PROC_LOCALE, || {
                     locale_spoof::revert(&path, !no_registry)
@@ -221,7 +232,7 @@ fn run(cmd: Command) -> Result<()> {
         },
         Command::Camera { action } => match action {
             PatchAction::Apply { dll, no_kill } => {
-                let path = resolve_dll(dll, camera_toast::TARGET_DLL)?;
+                let path = resolve_full_feature_dll(dll, camera_toast::TARGET_DLL)?;
                 close_apps(PROC_CAMERA, no_kill);
                 let out =
                     retry_patch_after_access_denied(PROC_CAMERA, || camera_toast::apply(&path))?;
@@ -230,7 +241,7 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
             PatchAction::Revert { dll, no_kill } => {
-                let path = resolve_dll(dll, camera_toast::TARGET_DLL)?;
+                let path = resolve_full_feature_dll(dll, camera_toast::TARGET_DLL)?;
                 close_apps(PROC_CAMERA, no_kill);
                 retry_patch_after_access_denied(PROC_CAMERA, || camera_toast::revert(&path))?;
                 println!("✓ 已还原摄像头弹窗补丁：{}", path.display());
@@ -240,7 +251,7 @@ fn run(cmd: Command) -> Result<()> {
         },
         Command::Audio { action } => match action {
             AudioAction::Apply { mode, dir, no_kill } => {
-                let dir = resolve_version_dir_or(dir)?;
+                let dir = resolve_full_version_dir_or(dir)?;
                 close_apps(PROC_AUDIO, no_kill);
                 let mode: mipcaudio_lan::BroadcastMode = mode.into();
                 let results = retry_patch_after_access_denied(PROC_AUDIO, || {
@@ -255,7 +266,7 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
             AudioAction::Revert { dir, no_kill } => {
-                let dir = resolve_version_dir_or(dir)?;
+                let dir = resolve_full_version_dir_or(dir)?;
                 close_apps(PROC_AUDIO, no_kill);
                 retry_patch_after_access_denied(PROC_AUDIO, || mipcaudio_lan::revert(&dir))?;
                 println!("✓ 已还原音频流转补丁（MiPCAudio.exe / idmruntime.dll）");
@@ -269,7 +280,7 @@ fn run(cmd: Command) -> Result<()> {
                 dir,
                 no_kill,
             } => {
-                let dir = resolve_version_dir_or(dir)?;
+                let dir = resolve_full_version_dir_or(dir)?;
                 close_apps(PROC_DEVICE, no_kill);
                 retry_patch_after_access_denied(PROC_DEVICE, || device_spoof::apply(&dir, &model))?;
                 println!("✓ 设备伪装已应用：机型 = {model}");
@@ -283,7 +294,7 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
             DeviceAction::Revert { dir, no_kill } => {
-                let dir = resolve_version_dir_or(dir)?;
+                let dir = resolve_full_version_dir_or(dir)?;
                 close_apps(PROC_DEVICE, no_kill);
                 retry_patch_after_access_denied(PROC_DEVICE, || device_spoof::revert(&dir))?;
                 println!("✓ 已还原设备伪装（移除 msimg32.dll 与注册表机型）");
@@ -291,37 +302,211 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
         },
+        Command::Install { installer, url } => install_pc_manager(installer, url),
     }
 }
 
-/// 解析单个目标 DLL 路径：优先显式路径，否则探测安装目录最新版本。
-fn resolve_dll(explicit: Option<PathBuf>, filename: &str) -> Result<PathBuf> {
+/// 解析地区伪装 DLL：优先显式路径，否则先找完整版电脑管家，再找 PcContinuity。
+fn resolve_locale_dll(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = explicit {
         if !p.exists() {
             bail!("指定的文件不存在：{}", p.display());
         }
         return Ok(p);
     }
-    let ver = resolve_version_dir()?;
-    let path = ver.join(filename);
+    let manager_root = install::find_install_root();
+    let continuity_root = install::find_pc_continuity_root();
+    resolve_locale_dll_from_roots(manager_root.as_deref(), continuity_root.as_deref())
+}
+
+fn resolve_locale_dll_from_roots(
+    manager_root: Option<&Path>,
+    continuity_root: Option<&Path>,
+) -> Result<PathBuf> {
+    let mut errors = Vec::new();
+    for root in [manager_root, continuity_root].into_iter().flatten() {
+        match install::latest_version_dir(root) {
+            Ok(version) => {
+                let dll = version.join(locale_spoof::TARGET_DLL);
+                if dll.exists() {
+                    return Ok(dll);
+                }
+                errors.push(format!(
+                    "在 {} 中未找到 {}",
+                    version.display(),
+                    locale_spoof::TARGET_DLL
+                ));
+            }
+            Err(error) => errors.push(error.to_string()),
+        }
+    }
+    if errors.is_empty() {
+        bail!("未找到 XiaomiPCManager 或 PcContinuity 安装目录");
+    }
+    bail!(
+        "未找到可用的 {}：{}",
+        locale_spoof::TARGET_DLL,
+        errors.join("；")
+    )
+}
+
+/// 解析仅完整版电脑管家支持的 DLL。
+fn resolve_full_feature_dll(explicit: Option<PathBuf>, filename: &str) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        if !path.exists() {
+            bail!("指定的文件不存在：{}", path.display());
+        }
+        let continuity_root = install::find_pc_continuity_root();
+        ensure_full_feature_path_supported(&path, continuity_root.as_deref())?;
+        return Ok(path);
+    }
+    let version = resolve_full_version_dir()?;
+    let path = version.join(filename);
     if !path.exists() {
-        bail!("在 {} 中未找到 {filename}", ver.display());
+        bail!("在 {} 中未找到 {filename}", version.display());
     }
     Ok(path)
 }
 
-/// 探测安装目录的最新版本目录。
-fn resolve_version_dir() -> Result<PathBuf> {
-    let root = install::find_install_root().context("未找到小米电脑管家安装目录")?;
-    install::latest_version_dir(&root)
+/// 探测完整版电脑管家的最新版本目录。
+fn resolve_full_version_dir() -> Result<PathBuf> {
+    let manager_root = install::find_install_root();
+    let continuity_root = install::find_pc_continuity_root();
+    resolve_full_version_dir_from_roots(manager_root.as_deref(), continuity_root.as_deref())
 }
 
-/// 显式版本目录优先，否则自动探测。
-fn resolve_version_dir_or(explicit: Option<PathBuf>) -> Result<PathBuf> {
+fn resolve_full_version_dir_from_roots(
+    manager_root: Option<&Path>,
+    continuity_root: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(root) = manager_root {
+        return install::latest_version_dir(root);
+    }
+    if continuity_root.is_some() {
+        bail!("PcContinuity 暂时仅支持地区伪装，其他功能不可用");
+    }
+    bail!("未找到 XiaomiPCManager 安装目录")
+}
+
+/// 显式版本目录优先，否则自动探测完整版电脑管家。
+fn resolve_full_version_dir_or(explicit: Option<PathBuf>) -> Result<PathBuf> {
     match explicit {
-        Some(d) if d.is_dir() => Ok(d),
+        Some(d) if d.is_dir() => {
+            let continuity_root = install::find_pc_continuity_root();
+            ensure_full_feature_path_supported(&d, continuity_root.as_deref())?;
+            Ok(d)
+        }
         Some(d) => bail!("指定的版本目录不存在：{}", d.display()),
-        None => resolve_version_dir(),
+        None => resolve_full_version_dir(),
+    }
+}
+
+fn ensure_full_feature_path_supported(path: &Path, continuity_root: Option<&Path>) -> Result<()> {
+    let Some(root) = continuity_root else {
+        return Ok(());
+    };
+    let normalized_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let normalized_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if normalized_path.starts_with(&normalized_root) {
+        bail!("PcContinuity 暂时仅支持地区伪装，其他功能不可用");
+    }
+    Ok(())
+}
+
+fn ensure_manager_install_available(continuity_root: Option<&Path>) -> Result<()> {
+    if let Some(root) = continuity_root {
+        bail!(
+            "已安装 PcContinuity（{}），官方不支持与 XiaomiPCManager 同时安装",
+            root.display()
+        );
+    }
+    Ok(())
+}
+
+fn install_pc_manager(explicit: Option<PathBuf>, url: Option<String>) -> Result<()> {
+    let continuity_root = install::find_pc_continuity_root();
+    ensure_manager_install_available(continuity_root.as_deref())?;
+    let patcher_dir = pc_manager_installer::patcher_dir()?;
+    let Some(installer) = choose_manager_installer(explicit, url.as_deref(), &patcher_dir)? else {
+        println!("已取消安装。");
+        return Ok(());
+    };
+    let pid = pc_manager_installer::launch_installer(&installer)?;
+    println!("✓ 已启动小米电脑管家安装包：{}", installer.display());
+    println!(
+        "  已释放 {} 至安装包目录 | PID: {pid}",
+        device_spoof::PROXY_DLL_NAME
+    );
+    Ok(())
+}
+
+fn choose_manager_installer(
+    explicit: Option<PathBuf>,
+    url: Option<&str>,
+    patcher_dir: &Path,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) = explicit {
+        return Ok(Some(path));
+    }
+    if let Some(url) = url {
+        println!("正在下载安装包到 {}", patcher_dir.display());
+        return pc_manager_installer::download_installer(url, patcher_dir).map(Some);
+    }
+
+    let candidates = pc_manager_installer::find_local_installers(patcher_dir)?;
+    match candidates.as_slice() {
+        [only] => {
+            println!("已找到安装包：{}", only.display());
+            Ok(Some(only.clone()))
+        }
+        [] => prompt_installer_source(patcher_dir),
+        _ => prompt_installer_candidate(&candidates),
+    }
+}
+
+fn prompt_installer_candidate(candidates: &[PathBuf]) -> Result<Option<PathBuf>> {
+    println!("找到多个小米电脑管家安装包：");
+    for (index, path) in candidates.iter().enumerate() {
+        println!("  {}) {}", index + 1, path.display());
+    }
+    println!("  0) 取消");
+    let choice = prompt("请选择安装包：")?;
+    if choice == "0" || choice.is_empty() {
+        return Ok(None);
+    }
+    let index = choice
+        .parse::<usize>()
+        .ok()
+        .filter(|index| (1..=candidates.len()).contains(index))
+        .context("无效的安装包选择")?;
+    Ok(Some(candidates[index - 1].clone()))
+}
+
+fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
+    println!("未在 Patcher 同目录找到 `*_XiaomiPCManager_*.exe`。");
+    println!("  1) 输入下载网址");
+    println!("  2) 指定本地 .exe 安装包");
+    println!("  0) 取消");
+    match prompt("请选择：")?.as_str() {
+        "1" => {
+            let url = prompt("请输入 HTTP(S) 下载地址：")?;
+            if url.is_empty() {
+                return Ok(None);
+            }
+            println!("正在下载安装包到 {}", patcher_dir.display());
+            pc_manager_installer::download_installer(&url, patcher_dir).map(Some)
+        }
+        "2" => {
+            let input = prompt("请输入 .exe 安装包路径：")?;
+            let path = input.trim().trim_matches(['"', '\'']);
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(PathBuf::from(path)))
+            }
+        }
+        "0" | "" => Ok(None),
+        _ => bail!("无效选择"),
     }
 }
 
@@ -427,32 +612,52 @@ fn report_inject(out: dotnet::InjectOutcome, path: &Path) {
 
 fn status() -> Result<()> {
     println!("== 小米电脑管家补丁状态 ==");
-    match install::find_install_root() {
-        Some(root) => {
-            println!("安装根目录：{}", root.display());
-            match install::latest_version_dir(&root) {
-                Ok(ver) => {
-                    println!("最新版本目录：{}", ver.display());
-                    print_file_status(&ver.join(locale_spoof::TARGET_DLL));
-                    print_file_status(&ver.join(camera_toast::TARGET_DLL));
-                    println!("  -- 音频流转广播模式 --");
-                    for (file, state) in mipcaudio_lan::current_state(&ver) {
-                        println!("     {file}: {state}");
-                    }
-                    println!("  -- 设备伪装 --");
-                    let (dll_ok, model) = device_spoof::current_state(&ver);
-                    println!(
-                        "     msimg32.dll: {} | 注册表机型: {}",
-                        if dll_ok { "已就位" } else { "未就位" },
-                        model.unwrap_or_else(|| "未设置".to_string())
-                    );
-                }
-                Err(e) => println!("（无法确定版本目录：{e}）"),
+    let manager_root = install::find_install_root();
+    let continuity_root = install::find_pc_continuity_root();
+    if manager_root.is_none() && continuity_root.is_none() {
+        println!("未探测到安装目录（可用 --dll/--dir 手动指定）。");
+        return Ok(());
+    }
+    if let Some(root) = manager_root {
+        println!("\n-- XiaomiPCManager（全功能）--");
+        print_full_installation_status(&root);
+    }
+    if let Some(root) = continuity_root {
+        println!("\n-- PcContinuity（仅地区伪装）--");
+        println!("安装根目录：{}", root.display());
+        match install::latest_version_dir(&root) {
+            Ok(version) => {
+                println!("最新版本目录：{}", version.display());
+                print_file_status(&version.join(locale_spoof::TARGET_DLL));
+                println!("  摄像头、音频流转和设备伪装：当前版本不可用");
             }
+            Err(error) => println!("（无法确定版本目录：{error}）"),
         }
-        None => println!("未探测到安装目录（可用 --dll/--dir 手动指定）。"),
     }
     Ok(())
+}
+
+fn print_full_installation_status(root: &Path) {
+    println!("安装根目录：{}", root.display());
+    match install::latest_version_dir(root) {
+        Ok(version) => {
+            println!("最新版本目录：{}", version.display());
+            print_file_status(&version.join(locale_spoof::TARGET_DLL));
+            print_file_status(&version.join(camera_toast::TARGET_DLL));
+            println!("  -- 音频流转广播模式 --");
+            for (file, state) in mipcaudio_lan::current_state(&version) {
+                println!("     {file}: {state}");
+            }
+            println!("  -- 设备伪装 --");
+            let (dll_ok, model) = device_spoof::current_state(&version);
+            println!(
+                "     msimg32.dll: {} | 注册表机型: {}",
+                if dll_ok { "已就位" } else { "未就位" },
+                model.unwrap_or_else(|| "未设置".to_string())
+            );
+        }
+        Err(error) => println!("（无法确定版本目录：{error}）"),
+    }
 }
 
 fn print_file_status(path: &Path) {
@@ -470,19 +675,36 @@ fn print_file_status(path: &Path) {
 
 fn interactive_menu() -> Result<()> {
     loop {
+        let full_features_available = install::find_install_root().is_some();
+        let manager_install_available = install::find_pc_continuity_root().is_none();
         println!("\n=== 小米电脑管家增强补丁 ===");
         println!("  1) 查看状态");
         println!("  2) 地区伪装");
-        println!("  3) 抑制摄像头弹窗");
-        println!("  4) 音频流转增强");
-        println!("  5) 设备伪装");
+        let unavailable = if full_features_available {
+            ""
+        } else {
+            "（当前安装不可用）"
+        };
+        println!("  3) 抑制摄像头弹窗{unavailable}");
+        println!("  4) 音频流转增强{unavailable}");
+        println!("  5) 设备伪装{unavailable}");
+        if manager_install_available {
+            println!("  6) 安装小米电脑管家");
+        }
         println!("  0) 退出");
         match prompt("请选择：")?.as_str() {
             "1" => run_logged(status()),
             "2" => menu_locale(),
-            "3" => menu_camera(),
-            "4" => menu_audio(),
-            "5" => menu_device(),
+            "3" if full_features_available => menu_camera(),
+            "4" if full_features_available => menu_audio(),
+            "5" if full_features_available => menu_device(),
+            "3" | "4" | "5" => println!("PcContinuity 暂时仅支持地区伪装。"),
+            "6" if manager_install_available => {
+                run_logged(run(Command::Install {
+                    installer: None,
+                    url: None,
+                }));
+            }
             "0" | "q" | "exit" => break,
             _ => println!("无效选择。"),
         }
@@ -651,5 +873,110 @@ fn read_choice() -> &'static str {
 fn run_logged(r: Result<()>) {
     if let Err(e) = r {
         eprintln!("错误：{e:#}");
+    }
+}
+
+#[cfg(test)]
+mod install_routing_tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mipcm_patch_{label}_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn locale_auto_resolution_uses_pc_continuity() {
+        let continuity_root = fixture_root("locale_continuity");
+        let version = continuity_root.join("1.1.2.36");
+        fs::create_dir_all(&version).unwrap();
+        fs::write(version.join(locale_spoof::TARGET_DLL), b"fixture").unwrap();
+
+        let resolved = resolve_locale_dll_from_roots(None, Some(&continuity_root)).unwrap();
+
+        assert_eq!(resolved, version.join(locale_spoof::TARGET_DLL));
+        fs::remove_dir_all(continuity_root).unwrap();
+    }
+
+    #[test]
+    fn full_features_are_unavailable_for_pc_continuity_only() {
+        let continuity_root = fixture_root("full_feature_continuity");
+        fs::create_dir_all(continuity_root.join("1.1.2.36")).unwrap();
+
+        let error = resolve_full_version_dir_from_roots(None, Some(&continuity_root))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("PcContinuity 暂时仅支持地区伪装"));
+        fs::remove_dir_all(continuity_root).unwrap();
+    }
+
+    #[test]
+    fn explicit_full_feature_path_inside_pc_continuity_is_rejected() {
+        let continuity_root = fixture_root("explicit_continuity");
+        let version = continuity_root.join("1.1.2.36");
+        fs::create_dir_all(&version).unwrap();
+
+        let error = ensure_full_feature_path_supported(&version, Some(&continuity_root))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("PcContinuity 暂时仅支持地区伪装"));
+        fs::remove_dir_all(continuity_root).unwrap();
+    }
+
+    #[test]
+    fn manager_install_feature_is_unavailable_when_pc_continuity_exists() {
+        assert!(ensure_manager_install_available(None).is_ok());
+        let continuity_root = Path::new(r"C:\Program Files\MI\PcContinuity");
+        let error = ensure_manager_install_available(Some(continuity_root))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("已安装 PcContinuity"));
+    }
+
+    #[test]
+    fn install_cli_accepts_exactly_one_package_source() {
+        assert!(Cli::try_parse_from(["mipcm_patch", "install"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "mipcm_patch",
+                "install",
+                "--installer",
+                "XiaomiPCManager.exe"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "mipcm_patch",
+                "install",
+                "--url",
+                "https://example.com/XiaomiPCManager.exe"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "mipcm_patch",
+                "install",
+                "--installer",
+                "local.exe",
+                "--url",
+                "https://example.com/remote.exe"
+            ])
+            .is_err()
+        );
     }
 }

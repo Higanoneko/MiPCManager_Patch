@@ -37,7 +37,14 @@ pub fn apply(version_dir: &Path, model: &str) -> Result<()> {
     if model.trim().is_empty() {
         bail!("机型代号不能为空");
     }
-    let target = version_dir.join(PROXY_DLL_NAME);
+    deploy_proxy(version_dir)?;
+    set_registry(model.trim())?;
+    Ok(())
+}
+
+/// 将内嵌代理 DLL 释放到指定目录，必要时备份已有文件。
+pub fn deploy_proxy(target_dir: &Path) -> Result<std::path::PathBuf> {
+    let target = target_dir.join(PROXY_DLL_NAME);
 
     // 若目标已存在且并非我们的 DLL，则先备份（避免覆盖系统/他人文件）。
     if target.exists() {
@@ -50,8 +57,7 @@ pub fn apply(version_dir: &Path, model: &str) -> Result<()> {
         }
     }
     install::write_file_atomic(&target, EMBEDDED_MSIMG32)?;
-    set_registry(model.trim())?;
-    Ok(())
+    Ok(target)
 }
 
 /// 还原设备伪装：移除注册表机型，删除我们释放的代理 DLL（或还原原文件）。
@@ -73,11 +79,15 @@ pub fn revert(version_dir: &Path) -> Result<()> {
 
 /// 读取当前状态：(代理DLL是否就位, 注册表机型)。用于 status 展示。
 pub fn current_state(version_dir: &Path) -> (bool, Option<String>) {
-    let target = version_dir.join(PROXY_DLL_NAME);
-    let dll_ok = std::fs::read(&target)
+    (proxy_is_current(version_dir), read_registry())
+}
+
+/// 检查指定目录中是否已是内嵌代理 DLL。
+pub fn proxy_is_current(dir: &Path) -> bool {
+    let target = dir.join(PROXY_DLL_NAME);
+    std::fs::read(&target)
         .map(|c| c == EMBEDDED_MSIMG32)
-        .unwrap_or(false);
-    (dll_ok, read_registry())
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
