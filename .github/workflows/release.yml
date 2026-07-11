@@ -127,11 +127,6 @@ jobs:
           $lines = [System.Collections.Generic.List[string]]::new()
           $lines.Add("## MiPCManager Patcher $env:RELEASE_VERSION")
           $lines.Add('')
-          $lines.Add("- Cargo.toml 基础版本：$env:BASE_VERSION")
-          if ($env:BASE_VERSION -ne $env:RELEASE_VERSION) {
-            $lines.Add("- 由于 v$env:BASE_VERSION 已存在，本次顺延发布为 v$env:RELEASE_VERSION。")
-          }
-          $lines.Add('')
           $lines.Add('### 更新日志')
           $lines.Add('')
 
