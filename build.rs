@@ -25,9 +25,13 @@ fn main() {
     // GUI：requireAdministrator + Common Controls v6（现代主题）。
     // 设置 MIPCM_SKIP_GUI_MANIFEST=1 可跳过（便于本机无 UAC 冒烟测试）。
     if std::env::var_os("MIPCM_SKIP_GUI_MANIFEST").is_none() {
-        embed_resource::compile_for("resources/mipcm_gui.rc", ["mipcm_gui"], embed_resource::NONE)
-            .manifest_required()
-            .unwrap();
+        embed_resource::compile_for(
+            "resources/mipcm_gui.rc",
+            ["mipcm_gui"],
+            embed_resource::NONE,
+        )
+        .manifest_required()
+        .unwrap();
     } else {
         // 仍嵌入图标 + Common Controls v6，但不强制管理员，便于自动化冒烟。
         embed_resource::compile_for(

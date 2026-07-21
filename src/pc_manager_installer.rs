@@ -254,7 +254,8 @@ pub fn launch_installer(installer: &Path) -> Result<u32> {
             temporary_existed,
         ));
     }
-    if let Err(error) = crate::device_spoof::ensure_spoof_model(crate::device_spoof::DEFAULT_MODEL) {
+    if let Err(error) = crate::device_spoof::ensure_spoof_model(crate::device_spoof::DEFAULT_MODEL)
+    {
         let reg_error = error.context("无法写入 SpoofDevice 伪装机型");
         return Err(rollback_after_error(
             reg_error,
@@ -524,8 +525,8 @@ fn launch_suspended_inject_and_patch(
 fn remote_main_image_base(pid: u32) -> Result<usize> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
-        TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32,
+        CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW, TH32CS_SNAPMODULE,
+        TH32CS_SNAPMODULE32,
     };
 
     // SAFETY: Toolhelp 快照句柄按文档 CloseHandle 释放。
@@ -543,10 +544,7 @@ fn remote_main_image_base(pid: u32) -> Result<usize> {
         unsafe {
             CloseHandle(snap);
         }
-        bail!(
-            "Module32FirstW 失败：{}",
-            std::io::Error::last_os_error()
-        );
+        bail!("Module32FirstW 失败：{}", std::io::Error::last_os_error());
     }
     // 主模块通常是快照中的第一项；再核对路径以免拿错。
     let mut base = entry.modBaseAddr as usize;
@@ -875,7 +873,10 @@ mod tests {
         );
         // 非安装包命名不应被识别。
         assert_eq!(classify_installer_filename("XiaomiPCManager.exe"), None);
-        assert_eq!(classify_installer_filename("小米互联最新版本_1.1.2.36.txt"), None);
+        assert_eq!(
+            classify_installer_filename("小米互联最新版本_1.1.2.36.txt"),
+            None
+        );
         // 两类安装包都需要部署代理以绕过机型校验。
         assert!(InstallerKind::PcContinuity.deploys_device_proxy());
         assert!(InstallerKind::XiaomiPcManager.deploys_device_proxy());
@@ -892,8 +893,14 @@ mod tests {
 
         let found = find_local_installers(&dir).unwrap();
 
-        assert!(found.contains(&dir.join(continuity)), "应识别小米互联安装包");
-        assert!(found.contains(&dir.join(manager)), "应识别小米电脑管家安装包");
+        assert!(
+            found.contains(&dir.join(continuity)),
+            "应识别小米互联安装包"
+        );
+        assert!(
+            found.contains(&dir.join(manager)),
+            "应识别小米电脑管家安装包"
+        );
         assert_eq!(found.len(), 2, "仅应识别两个安装包");
         assert_eq!(
             classify_installer(&dir.join(continuity)),
@@ -1033,10 +1040,7 @@ mod tests {
         let pe = fs::read(&path).unwrap();
         let rvas = find_match_product_patch_rvas(&pe).expect("应能定位旁路点");
         // 1.1.2.36：Preload / Match / WinVersionMatch
-        assert!(
-            rvas.contains(&0x000C_9340),
-            "缺少 Preload 入口：{rvas:x?}"
-        );
+        assert!(rvas.contains(&0x000C_9340), "缺少 Preload 入口：{rvas:x?}");
         assert!(
             rvas.contains(&0x000C_9440),
             "缺少 MatchProductModel 入口：{rvas:x?}"

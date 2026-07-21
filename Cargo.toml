@@ -1,6 +1,6 @@
 [package]
 name = "mipcmanager_patch"
-version = "1.5.1"
+version = "1.5.2"
 edition = "2024"
 description = "小米电脑管家 (MiPCManager) 功能增强补丁工具：原生 DLL 字符串补丁 + .NET 方法体重定位补丁"
 
@@ -22,8 +22,7 @@ clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-# sysinfo 0.39.x 全系要求 rustc 1.95，本机工具链为 1.89，故固定在 0.38（API 兼容）。
-sysinfo = "0.38"
+sysinfo = "0.39"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -37,15 +36,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # 轻量即时模式 GUI（mipcm_gui）：glow 后端，体积可控。
-eframe = { version = "0.31", default-features = false, features = [
+eframe = { version = "0.35", default-features = false, features = [
     "glow",
     "default_fonts",
 ] }
-egui = "0.31"
-rfd = "0.15"
+egui = "0.35"
+ico = "0.5"
+rfd = "0.17"
 
 [build-dependencies]
-embed-resource = "3.0.9"
+embed-resource = "3.0.11"
 
 [profile.release]
 opt-level = "z"

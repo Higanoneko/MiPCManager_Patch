@@ -177,7 +177,11 @@ pub fn apply_locale(
     Ok(log)
 }
 
-pub fn revert_locale(dll: Option<PathBuf>, remove_registry: bool, no_kill: bool) -> Result<Vec<String>> {
+pub fn revert_locale(
+    dll: Option<PathBuf>,
+    remove_registry: bool,
+    no_kill: bool,
+) -> Result<Vec<String>> {
     let path = resolve_locale_dll(dll)?;
     let mut log = Vec::new();
     close_apps_required(PROC_LOCALE, no_kill, &mut log)?;
@@ -222,7 +226,11 @@ pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
 // ===================== 音频流转 =====================
 
 /// 应用音频补丁；GUI 等不需要公开高级选项的调用方使用默认的双网卡修复行为。
-pub fn apply_audio(mode: BroadcastMode, dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+pub fn apply_audio(
+    mode: BroadcastMode,
+    dir: Option<PathBuf>,
+    no_kill: bool,
+) -> Result<Vec<String>> {
     apply_audio_with_options(mode, dir, no_kill, false)
 }
 
@@ -259,8 +267,7 @@ pub fn apply_audio_with_options(
             ),
             Some(false) => log.push("  Wi-Fi 本地子网优先路由已存在。".to_string()),
             None => log.push(
-                "  未检测到可用 Wi-Fi IPv4 接口；已保留有线广播补丁，未添加本地路由。"
-                    .to_string(),
+                "  未检测到可用 Wi-Fi IPv4 接口；已保留有线广播补丁，未添加本地路由。".to_string(),
             ),
         },
         (BroadcastMode::Wireless, _) => {
@@ -461,7 +468,10 @@ pub fn resolve_full_version_dir_or(explicit: Option<PathBuf>) -> Result<PathBuf>
     }
 }
 
-pub fn ensure_full_feature_path_supported(path: &Path, continuity_root: Option<&Path>) -> Result<()> {
+pub fn ensure_full_feature_path_supported(
+    path: &Path,
+    continuity_root: Option<&Path>,
+) -> Result<()> {
     let Some(root) = continuity_root else {
         return Ok(());
     };
@@ -526,7 +536,10 @@ where
                 log.push(format!("已关闭 {n} 个相关进程：{}", procs.join(", ")));
             }
             if !running.is_empty() {
-                log.push(format!("以下进程仍在运行，将按要求重试一次：{}", running.join(", ")));
+                log.push(format!(
+                    "以下进程仍在运行，将按要求重试一次：{}",
+                    running.join(", ")
+                ));
             }
             patch()
         }
@@ -614,7 +627,8 @@ mod tests {
 
         // 已装小米互联：可继续安装/升级小米互联，但不允许再装小米电脑管家。
         assert!(
-            ensure_install_allowed(InstallerKind::PcContinuity, None, Some(continuity_root)).is_ok()
+            ensure_install_allowed(InstallerKind::PcContinuity, None, Some(continuity_root))
+                .is_ok()
         );
         let error =
             ensure_install_allowed(InstallerKind::XiaomiPcManager, None, Some(continuity_root))
@@ -624,7 +638,8 @@ mod tests {
 
         // 已装小米电脑管家：可继续安装/升级，但不允许再装小米互联。
         assert!(
-            ensure_install_allowed(InstallerKind::XiaomiPcManager, Some(manager_root), None).is_ok()
+            ensure_install_allowed(InstallerKind::XiaomiPcManager, Some(manager_root), None)
+                .is_ok()
         );
         let error = ensure_install_allowed(InstallerKind::PcContinuity, Some(manager_root), None)
             .unwrap_err()

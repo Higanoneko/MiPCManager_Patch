@@ -11,15 +11,36 @@ fn main() {
 }
 
 #[cfg(windows)]
+fn load_app_icon() -> std::sync::Arc<egui::IconData> {
+    let ico_bytes = include_bytes!("../../assets/MiPCManager.ico");
+    let Ok(icon_dir) = ico::IconDir::read(std::io::Cursor::new(ico_bytes.as_ref())) else {
+        return std::sync::Arc::new(egui::IconData::default());
+    };
+    if let Some(entry) = icon_dir.entries().first() {
+        if let Ok(image) = entry.decode() {
+            return std::sync::Arc::new(egui::IconData {
+                rgba: image.rgba_data().to_vec(),
+                width: image.width(),
+                height: image.height(),
+            });
+        }
+    }
+    std::sync::Arc::new(egui::IconData::default())
+}
+
+#[cfg(windows)]
 fn main() {
     mipcmanager_patch::elevate::ensure_elevated();
 
+    let icon = load_app_icon();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([760.0, 840.0])
-            .with_min_inner_size([640.0, 680.0])
+            .with_inner_size([760.0, 1050.0])
+            .with_min_inner_size([640.0, 820.0])
             .with_title("MiPCM Patch")
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(icon),
         centered: true,
         ..Default::default()
     };
@@ -55,7 +76,6 @@ impl PatchApp {
             full_features: false,
             last_error: None,
         };
-        app.push_log("欢迎使用增强补丁。可将安装包拖入下方安装区。");
         app.refresh_status();
         app
     }
@@ -113,9 +133,10 @@ impl PatchApp {
 
 #[cfg(windows)]
 impl eframe::App for PatchApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         use mipcmanager_patch::{device_spoof, ops};
 
+        let ctx = ui.ctx().clone();
         let dropped: Vec<_> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -144,7 +165,7 @@ impl eframe::App for PatchApp {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(soft).inner_margin(18.0))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
@@ -386,7 +407,7 @@ impl eframe::App for PatchApp {
 
 #[cfg(windows)]
 fn apply_theme(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 8.0);
     style.visuals = egui::Visuals::light();
@@ -395,7 +416,7 @@ fn apply_theme(ctx: &egui::Context) {
     style.visuals.widgets.inactive.corner_radius = 8.0.into();
     style.visuals.widgets.hovered.corner_radius = 8.0.into();
     style.visuals.widgets.active.corner_radius = 8.0.into();
-    ctx.set_style(style);
+    ctx.set_style_of(egui::Theme::Light, style);
 
     let mut fonts = egui::FontDefinitions::default();
     for path in [
@@ -437,6 +458,7 @@ fn section_card(
         .corner_radius(14.0)
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
+            ui.expand_to_include_rect(ui.max_rect());
             ui.label(
                 egui::RichText::new(title)
                     .size(14.0)
@@ -450,7 +472,6 @@ fn section_card(
 
 #[cfg(windows)]
 fn action_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    // 只固定左侧标签列宽；切勿对整行 set_width，否则按钮会挤在 120px 内重叠。
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(
             egui::vec2(128.0, 32.0),
@@ -464,20 +485,29 @@ fn action_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
             },
         );
         ui.add_space(8.0);
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            add(ui);
-        });
+        let remaining = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(remaining, 32.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                add(ui);
+            },
+        );
     });
 }
 
 #[cfg(windows)]
 fn primary_btn(ui: &mut egui::Ui, accent: egui::Color32, text: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE).strong())
-            .fill(accent)
-            .corner_radius(8.0)
-            .min_size(egui::vec2(72.0, 32.0)),
+        egui::Button::new(
+            egui::RichText::new(text)
+                .color(egui::Color32::WHITE)
+                .strong(),
+        )
+        .fill(accent)
+        .corner_radius(8.0)
+        .min_size(egui::vec2(72.0, 32.0)),
     )
 }
 

@@ -296,7 +296,9 @@ fn prompt_installer_candidate(candidates: &[PathBuf]) -> Result<Option<PathBuf>>
 }
 
 fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
-    println!("未在 Patcher 同目录找到安装包（小米电脑管家 `*_XiaomiPCManager_*.exe` 或小米互联 `小米互联*.exe`）。");
+    println!(
+        "未在 Patcher 同目录找到安装包（小米电脑管家 `*_XiaomiPCManager_*.exe` 或小米互联 `小米互联*.exe`）。"
+    );
     println!("  1) 输入下载网址");
     println!("  2) 指定本地 .exe 安装包");
     println!("  0) 取消");
