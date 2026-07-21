@@ -143,7 +143,7 @@ impl SmbiosTable {
 }
 
 impl SmbiosFieldRole {
-    pub fn target_value(&self, model_code: &str) -> &str {
+    pub fn target_value<'a>(&self, model_code: &'a str) -> &'a str {
         match self {
             Self::Type1Manufacturer | Self::Type2Manufacturer => "XIAOMI",
             Self::Type2Product => model_code,

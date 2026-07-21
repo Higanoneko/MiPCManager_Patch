@@ -138,7 +138,7 @@ pub fn build_trampoline(iat_rva: u32, entries: &[ReplaceEntry]) -> TrampolineCod
 
     TrampolineCode {
         bytes: code,
-        iat_disp_byte_offset,
+        iat_disp_byte_offset: iat_disp_offset,
     }
 }
 
