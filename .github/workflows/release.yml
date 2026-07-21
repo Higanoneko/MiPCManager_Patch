@@ -54,38 +54,28 @@ jobs:
             throw 'Cargo.toml 的 [package] 中未找到 version。'
           }
 
-          $baseVersion = $versionMatch.Groups[1].Value
-          if ($baseVersion -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
-            throw "当前工作流要求三段式版本号，实际为：$baseVersion"
+          $releaseVersion = $versionMatch.Groups[1].Value
+          if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "当前工作流要求三段式版本号，实际为：$releaseVersion"
           }
 
-          function Test-ReleaseOrTagExists([string] $tag) {
-            gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-            if ($LASTEXITCODE -eq 0) {
-              $global:LASTEXITCODE = 0
-              return $true
-            }
-            gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" *> $null
-            $exists = $LASTEXITCODE -eq 0
-            # 不存在是正常的检查结果，不应让本步以 gh 的非零退出码结束。
-            $global:LASTEXITCODE = 0
-            return $exists
+          $tag = "v$releaseVersion"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $tag 已存在；请先在 Cargo.toml 中提升 version 后再发版。"
           }
-
-          $releaseVersion = $baseVersion
-          while (Test-ReleaseOrTagExists "v$releaseVersion") {
-            $patch = [int64]$Matches.patch + 1
-            $releaseVersion = "{0}.{1}.{2}" -f $Matches.major, $Matches.minor, $patch
-            if ($releaseVersion -notmatch '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$') {
-              throw "无法递增版本号：$releaseVersion"
-            }
+          gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag $tag 已存在；请先在 Cargo.toml 中提升 version 后再发版。"
           }
+          $global:LASTEXITCODE = 0
 
-          "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
           "version=$releaseVersion" >> $env:GITHUB_OUTPUT
-          "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
-          Write-Host "Cargo.toml version: $baseVersion"
-          Write-Host "Release version:    $releaseVersion"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "cli_asset=MiPCM_Patch_CLI_v$releaseVersion.exe" >> $env:GITHUB_OUTPUT
+          "gui_asset=MiPCM_Patch_GUI_v$releaseVersion.exe" >> $env:GITHUB_OUTPUT
+          Write-Host "Cargo.toml / Release version: $releaseVersion"
+          Write-Host "Assets: MiPCM_Patch_CLI_v$releaseVersion.exe , MiPCM_Patch_GUI_v$releaseVersion.exe"
 
       - name: Build release binaries
         shell: pwsh
@@ -94,16 +84,19 @@ jobs:
       - name: Stage release assets
         id: artifact
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          CLI_ASSET: ${{ steps.version.outputs.cli_asset }}
+          GUI_ASSET: ${{ steps.version.outputs.gui_asset }}
         run: |
           $outDir = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
           $assets = @(
-            @{ Source = 'target\release\mipcm_patch.exe'; Name = 'mipcm_patch.exe' },
-            @{ Source = 'target\release\mipcm_gui.exe';   Name = 'mipcm_gui.exe' }
+            @{ Source = 'target\release\mipcm_patch.exe'; Name = $env:CLI_ASSET },
+            @{ Source = 'target\release\mipcm_gui.exe';   Name = $env:GUI_ASSET }
           )
 
-          $paths = [System.Collections.Generic.List[string]]::new()
           foreach ($asset in $assets) {
             $source = Join-Path $env:GITHUB_WORKSPACE $asset.Source
             if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
@@ -111,19 +104,16 @@ jobs:
             }
             $dest = Join-Path $outDir $asset.Name
             Copy-Item -LiteralPath $source -Destination $dest -Force
-            $paths.Add($dest)
             Write-Host "Release asset: $dest"
           }
 
           "dir=$outDir" >> $env:GITHUB_OUTPUT
-          "files=$($paths -join `n)" >> $env:GITHUB_OUTPUT
 
       - name: Generate changelog
         id: changelog
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_VERSION: ${{ steps.version.outputs.base_version }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -138,6 +128,11 @@ jobs:
 
           $lines = [System.Collections.Generic.List[string]]::new()
           $lines.Add("## MiPCManager Patcher $env:RELEASE_VERSION")
+          $lines.Add('')
+          $lines.Add('### 产物')
+          $lines.Add('')
+          $lines.Add("- ``MiPCM_Patch_CLI_v$env:RELEASE_VERSION.exe``")
+          $lines.Add("- ``MiPCM_Patch_GUI_v$env:RELEASE_VERSION.exe``")
           $lines.Add('')
           $lines.Add('### 更新日志')
           $lines.Add('')
@@ -166,11 +161,13 @@ jobs:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           ASSET_DIR: ${{ steps.artifact.outputs.dir }}
+          CLI_ASSET: ${{ steps.version.outputs.cli_asset }}
+          GUI_ASSET: ${{ steps.version.outputs.gui_asset }}
           NOTES_PATH: ${{ steps.changelog.outputs.path }}
         run: |
           $assets = @(
-            (Join-Path $env:ASSET_DIR 'mipcm_patch.exe'),
-            (Join-Path $env:ASSET_DIR 'mipcm_gui.exe')
+            (Join-Path $env:ASSET_DIR $env:CLI_ASSET),
+            (Join-Path $env:ASSET_DIR $env:GUI_ASSET)
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
