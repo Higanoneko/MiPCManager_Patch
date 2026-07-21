@@ -4,7 +4,7 @@
 //!   status            查看安装信息与补丁状态
 //!   locale apply|revert   地区伪装（micont_rtm.dll + 注册表）
 //!   camera apply|revert   抑制「请确认摄像头状态」弹窗（PcControlCenter.dll）
-//!   audio  apply|revert   音频流转无线/有线广播模式（MiPCAudio.exe + idmruntime.dll）
+//!   audio  apply|revert   音频流转无线/有线广播模式（含双网卡媒体路由修复）
 //!   device apply|revert   设备伪装（释放 msimg32.dll + 注册表机型）
 //!   install           安装小米电脑管家 / 小米互联（搜索/下载安装包并按产品处理）
 //!
@@ -44,7 +44,7 @@ enum Command {
         #[command(subcommand)]
         action: PatchAction,
     },
-    /// MiPCAudio 音频流转广播模式（无线/有线，统一三处身份消除重复设备）
+    /// MiPCAudio 音频流转广播模式（无线/有线，统一身份并修复双网卡媒体路由）
     Audio {
         #[command(subcommand)]
         action: AudioAction,
@@ -97,6 +97,9 @@ enum AudioAction {
         dir: Option<PathBuf>,
         #[arg(long)]
         no_kill: bool,
+        /// 有线广播时，不创建 Wi-Fi 本地子网路由（双网卡同网段时可能导致手机立即断流）
+        #[arg(long)]
+        no_wifi_local_route: bool,
     },
     /// 还原音频流转补丁
     Revert {
@@ -193,8 +196,18 @@ fn run(cmd: Command) -> Result<()> {
             }
         },
         Command::Audio { action } => match action {
-            AudioAction::Apply { mode, dir, no_kill } => {
-                print_log(ops::apply_audio(mode.into(), dir, no_kill)?);
+            AudioAction::Apply {
+                mode,
+                dir,
+                no_kill,
+                no_wifi_local_route,
+            } => {
+                print_log(ops::apply_audio_with_options(
+                    mode.into(),
+                    dir,
+                    no_kill,
+                    no_wifi_local_route,
+                )?);
                 Ok(())
             }
             AudioAction::Revert { dir, no_kill } => {
@@ -403,11 +416,13 @@ fn menu_audio() {
             mode: ModeArg::Wifi,
             dir: None,
             no_kill: false,
+            no_wifi_local_route: false,
         },
         "2" => AudioAction::Apply {
             mode: ModeArg::Lan,
             dir: None,
             no_kill: false,
+            no_wifi_local_route: false,
         },
         "3" => AudioAction::Revert {
             dir: None,

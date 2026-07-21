@@ -74,6 +74,12 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 - `--mode wifi`：三处 = `0x47`（等同出厂，单设备、走 WiFi）
 - `--mode lan`：三处 = `0x06`（统一以太网，单设备、走有线）
 
+### 双网卡同网段的媒体会话路由
+
+仅替换上述三处会让广播身份使用有线 MAC，但实际 WFD 音频会话由 `MiPlayCastService.exe` 子进程建立。抓取日志可见故障场景已完成发现、认证与 `SETUP`，PC 发出 `PLAY` 后手机立刻发送 `wfd_trigger_method: TEARDOWN`，且没有 RTP 音频包。根因是有线与 Wi-Fi 同时在线且同一 IPv4 子网时，Windows 因有线跃点更低，令该会话从有线接口出站，手机发现身份与媒体接口不一致而拒绝播放。
+
+因此 `audio apply --mode lan` 默认会新增一条由工具记录和管理的 **持久 Wi-Fi 本地子网路由**（路由跃点为 1）。它只匹配 Wi-Fi 的本地 IPv4 前缀；互联网默认路由继续按用户原有的有线跃点选择。切回 `--mode wifi` 或执行 `audio revert` 会只删除本工具创建的该条路由。必要时可用 `--no-wifi-local-route` 关闭此行为。
+
 定位采用指令块特征（含其后的 `jne`，保证唯一）而非硬编码偏移，已在版本升级（5.8.0.14 -> 5.8.0.74）后验证仍精确命中。等长字节替换、幂等、可还原；WiFi 态输出与出厂逐字节一致。
 
 代码：[`src/mipcaudio_lan.rs`](src/mipcaudio_lan.rs)

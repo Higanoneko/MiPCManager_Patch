@@ -3,7 +3,10 @@
 //! 所有补丁动作都在这里编排：解析目标路径 → 关闭相关进程 → 应用/还原补丁 → 汇总日志。
 //! 每个高层函数返回 `Vec<String>` 日志行，CLI 直接打印、GUI 追加到日志区，二者共用同一套逻辑。
 
-use crate::{camera_toast, device_spoof, dotnet, install, locale_spoof, mipcaudio_lan, pc_manager_installer};
+use crate::{
+    audio_wifi_route, camera_toast, device_spoof, dotnet, install, locale_spoof, mipcaudio_lan,
+    pc_manager_installer,
+};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,7 +41,7 @@ pub const PROC_MIPCM_ALL: &[&str] = &[
 /// 各功能在打补丁前需要关闭的进程（不含扩展名）。补丁后由用户手动重新打开。
 pub const PROC_LOCALE: &[&str] = &["micont_service"];
 pub const PROC_CAMERA: &[&str] = &["XiaomiPcManager"];
-pub const PROC_AUDIO: &[&str] = &["MiPCAudio", "MAFSvr", "MASFvr"];
+pub const PROC_AUDIO: &[&str] = &["MiPCAudio", "MiPlayCastService", "MAFSvr", "MASFvr"];
 pub const PROC_DEVICE: &[&str] = &["XiaomiPcManager"];
 
 const RESTART_HINT: &str = "提示：补丁已完成，请手动重新启动小米电脑管家使其生效。";
@@ -116,6 +119,10 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
             for (file, state) in mipcaudio_lan::current_state(&version) {
                 out.push(format!("     {file}: {state}"));
             }
+            out.push(format!(
+                "     Wi-Fi 本地路由: {}",
+                audio_wifi_route::state(&version)
+            ));
             out.push("  -- 设备伪装 --".to_string());
             let (dll_ok, model) = device_spoof::current_state(&version);
             out.push(format!(
@@ -214,15 +221,29 @@ pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
 
 // ===================== 音频流转 =====================
 
+/// 应用音频补丁；GUI 等不需要公开高级选项的调用方使用默认的双网卡修复行为。
 pub fn apply_audio(mode: BroadcastMode, dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    apply_audio_with_options(mode, dir, no_kill, false)
+}
+
+/// 应用音频补丁，并允许 CLI 显式关闭 Wi-Fi 本地子网路由修复。
+pub fn apply_audio_with_options(
+    mode: BroadcastMode,
+    dir: Option<PathBuf>,
+    no_kill: bool,
+    no_wifi_local_route: bool,
+) -> Result<Vec<String>> {
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
     close_apps(PROC_AUDIO, no_kill, &mut log);
-    let mode: mipcaudio_lan::BroadcastMode = mode.into();
+    let patch_mode: mipcaudio_lan::BroadcastMode = mode.into();
     let results = retry_patch_after_access_denied(PROC_AUDIO, &mut log, || {
-        mipcaudio_lan::apply(&dir, mode)
+        mipcaudio_lan::apply(&dir, patch_mode)
     })?;
-    log.push(format!("✓ 音频流转广播模式已切换为：{}", mode.label()));
+    log.push(format!(
+        "✓ 音频流转广播模式已切换为：{}",
+        patch_mode.label()
+    ));
     for (file, outcome) in results {
         log.push(format!(
             "  {file}: 改写 {} 处, 已是目标 {} 处",
@@ -230,6 +251,25 @@ pub fn apply_audio(mode: BroadcastMode, dir: Option<PathBuf>, no_kill: bool) -> 
         ));
     }
     log.push("  （三处网卡身份已统一 → 手机端应为单设备）".to_string());
+    match (mode, no_wifi_local_route) {
+        (BroadcastMode::Wired, false) => match audio_wifi_route::apply(&dir)? {
+            Some(true) => log.push(
+                "  已添加 Wi-Fi 本地子网优先路由：音频会话走 Wi-Fi，本机默认流量仍走有线。"
+                    .to_string(),
+            ),
+            Some(false) => log.push("  Wi-Fi 本地子网优先路由已存在。".to_string()),
+            None => log.push(
+                "  未检测到可用 Wi-Fi IPv4 接口；已保留有线广播补丁，未添加本地路由。"
+                    .to_string(),
+            ),
+        },
+        (BroadcastMode::Wireless, _) => {
+            if audio_wifi_route::revert(&dir)? {
+                log.push("  已移除此前为有线广播添加的 Wi-Fi 本地子网优先路由。".to_string());
+            }
+        }
+        (BroadcastMode::Wired, true) => {}
+    }
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -239,6 +279,9 @@ pub fn revert_audio(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> 
     let mut log = Vec::new();
     close_apps(PROC_AUDIO, no_kill, &mut log);
     retry_patch_after_access_denied(PROC_AUDIO, &mut log, || mipcaudio_lan::revert(&dir))?;
+    if audio_wifi_route::revert(&dir)? {
+        log.push("  已移除 Wi-Fi 本地子网优先路由。".to_string());
+    }
     log.push("✓ 已还原音频流转补丁（MiPCAudio.exe / idmruntime.dll）".to_string());
     log.push(RESTART_HINT.to_string());
     Ok(log)

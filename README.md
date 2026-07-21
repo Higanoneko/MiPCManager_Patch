@@ -36,7 +36,7 @@
 mipcm_patch status
 mipcm_patch locale apply | revert
 mipcm_patch camera apply | revert
-mipcm_patch audio  apply --mode wifi|lan | revert
+mipcm_patch audio  apply --mode wifi|lan [--no-wifi-local-route] | revert
 mipcm_patch device apply --model TM2424 | revert
 mipcm_patch install [--installer <exe> | --url <url>]
 ```
@@ -46,6 +46,7 @@ mipcm_patch install [--installer <exe> | --url <url>]
 - `--dll <路径>`：为 `locale` / `camera` 指定目标 DLL。
 - `--dir <版本目录>`：为 `audio` / `device` 指定小米电脑管家版本目录。
 - `--no-kill`：不自动关闭相关进程。
+- `audio --no-wifi-local-route`：有线广播时不添加 Wi-Fi 本地子网优先路由；仅在明确不需要双网卡同网段修复时使用。
 - `locale --region <地区>`：指定地区值，默认 `CN`。
 - `locale --no-registry`：不写入地区注册表值。
 - `device --model <机型代号>`：指定伪装机型，默认 `TM2424`。
@@ -71,6 +72,8 @@ mipcm_patch install [--installer <exe> | --url <url>]
 - `--mode wifi`：恢复/使用无线模式。
 - `--mode lan`：使用有线模式。
 
+使用 `--mode lan` 且有线、Wi-Fi 同时在线时，工具会额外创建一条由工具管理的 Wi-Fi 本地子网路由。它只让到手机所在局域网的音频会话从 Wi-Fi 网卡返回，默认路由仍保持有线优先；`audio revert` 会移除该路由。
+
 如果手机端反复切换后仍显示重复设备或连接状态异常，可以在手机端将该电脑移除/忘记后重新配对。
 
 ### 设备伪装
@@ -93,7 +96,7 @@ mipcm_patch install [--installer <exe> | --url <url>]
 ## 注意事项
 
 - 完整版 `XiaomiPCManager` 被探测到时，工具启动会先关闭其相关进程。`PcContinuity` 不做启动时全量关闭，只在地区伪装前处理 `micont_service.exe`。补丁后请手动重新打开相关程序。
-- 各补丁动作执行前仍会按功能关闭对应进程作为兜底：地区伪装关闭 `micont_service.exe`，摄像头弹窗和设备伪装关闭 `XiaomiPcManager.exe`，音频流转关闭 `MiPCAudio.exe` 与 `MAFSvr.exe`。
+- 各补丁动作执行前仍会按功能关闭对应进程作为兜底：地区伪装关闭 `micont_service.exe`，摄像头弹窗和设备伪装关闭 `XiaomiPcManager.exe`，音频流转关闭 `MiPCAudio.exe`、`MiPlayCastService.exe` 与 `MAFSvr.exe`。
 - 地区伪装 Patch 前必须确保 `micont_service.exe` 已退出；若使用 `--no-kill` 且该进程仍在运行，工具会拒绝继续 Patch。
 - `PcContinuity` 安装目录下只允许地区伪装；即使通过 `--dll` 或 `--dir` 显式指定其中的路径，其他补丁也会被拒绝。
 - 所有 Patch/还原操作若遇到 `拒绝访问。 (os error 5)`，工具会自动关闭对应进程并重试一次。
