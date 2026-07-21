@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use mipcmanager_patch::{device_spoof, elevate, ops, pc_manager_installer};
+use mipcmanager_patch::{audio_dual_nic, device_spoof, elevate, ops, pc_manager_installer};
 use std::io::{Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 
@@ -97,7 +97,7 @@ enum AudioAction {
         dir: Option<PathBuf>,
         #[arg(long)]
         no_kill: bool,
-        /// 有线广播时，不创建 Wi-Fi 本地子网路由（双网卡同网段时可能导致手机立即断流）
+        /// 不自动管理 Wi-Fi 本地子网优先路由（无线模式下用于修复双网卡同网段断流）
         #[arg(long)]
         no_wifi_local_route: bool,
     },
@@ -107,6 +107,15 @@ enum AudioAction {
         dir: Option<PathBuf>,
         #[arg(long)]
         no_kill: bool,
+    },
+    /// [实验性] 双网卡同网段音频修复：诊断并自动对齐 Wi-Fi 路由与广播模式
+    ExperimentalFix {
+        /// 仅诊断，不执行修复
+        #[arg(long)]
+        dry_run: bool,
+        /// 指定版本目录（默认自动探测）
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
 }
 
@@ -212,6 +221,17 @@ fn run(cmd: Command) -> Result<()> {
             }
             AudioAction::Revert { dir, no_kill } => {
                 print_log(ops::revert_audio(dir, no_kill)?);
+                Ok(())
+            }
+            AudioAction::ExperimentalFix { dry_run, dir } => {
+                let dir = dir
+                    .map(Ok)
+                    .unwrap_or_else(ops::resolve_full_version_dir)?;
+                if dry_run {
+                    print_log(audio_dual_nic::diagnose(&dir)?);
+                } else {
+                    print_log(audio_dual_nic::auto_fix(&dir)?);
+                }
                 Ok(())
             }
         },
@@ -408,10 +428,12 @@ fn menu_camera() {
 }
 
 fn menu_audio() {
-    println!("\n-- 音频流转增强--");
+    println!("\n-- 音频流转增强 --");
     println!("  1) 切换为【无线 WiFi】广播");
     println!("  2) 切换为【有线 LAN】广播");
     println!("  3) 还原");
+    println!("  4) [实验性] 双网卡同网段音频诊断");
+    println!("  5) [实验性] 双网卡同网段音频修复");
     println!("  0) 返回");
     let action = match read_choice() {
         "1" => AudioAction::Apply {
@@ -429,6 +451,14 @@ fn menu_audio() {
         "3" => AudioAction::Revert {
             dir: None,
             no_kill: false,
+        },
+        "4" => AudioAction::ExperimentalFix {
+            dry_run: true,
+            dir: None,
+        },
+        "5" => AudioAction::ExperimentalFix {
+            dry_run: false,
+            dir: None,
         },
         _ => return,
     };
@@ -516,6 +546,8 @@ fn read_choice() -> &'static str {
         "1" => "1",
         "2" => "2",
         "3" => "3",
+        "4" => "4",
+        "5" => "5",
         "c" | "C" => "c",
         "0" | "q" | "exit" | "" => "0",
         _ => "?",

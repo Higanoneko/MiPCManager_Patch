@@ -273,6 +273,37 @@ impl eframe::App for PatchApp {
                                     }
                                 });
                                 ui.add_space(8.0);
+                                ui.add_enabled_ui(self.full_features, |ui| {
+                                    action_row(ui, "双网卡音频 [实验性]", |ui| {
+                                        if ghost_btn(ui, ink, line, "诊断").clicked() {
+                                            let dir = match ops::resolve_full_version_dir() {
+                                                Ok(d) => d,
+                                                Err(e) => {
+                                                    self.push_log(&format!("错误：{e:#}"));
+                                                    return;
+                                                }
+                                            };
+                                            self.run_op(
+                                                "双网卡音频 · 诊断",
+                                                mipcmanager_patch::audio_dual_nic::diagnose(&dir),
+                                            );
+                                        }
+                                        if primary_btn(ui, accent, "修复").clicked() {
+                                            let dir = match ops::resolve_full_version_dir() {
+                                                Ok(d) => d,
+                                                Err(e) => {
+                                                    self.push_log(&format!("错误：{e:#}"));
+                                                    return;
+                                                }
+                                            };
+                                            self.run_op(
+                                                "双网卡音频 · 修复",
+                                                mipcmanager_patch::audio_dual_nic::auto_fix(&dir),
+                                            );
+                                        }
+                                    });
+                                });
+                                ui.add_space(8.0);
                                 action_row(ui, "设备伪装", |ui| {
                                     egui::ComboBox::from_id_salt("model_combo")
                                         .selected_text(

@@ -1,9 +1,10 @@
-//! 为「有线广播 + Wi-Fi 同时在线」场景补足媒体会话的出接口选择。
+//! 为「无线广播 + 有线同时在线」场景补足媒体会话的出接口选择。
 //!
 //! MiPCAudio / idmruntime 中的 IfType 补丁只影响设备发现身份（MAC），真正建立
-//! WFD 音频 TCP 会话的是 MiPlayCastService 子进程。若有线和 Wi-Fi 位于同一 IPv4
-//! 子网，Windows 会因有线跃点更低而让该会话从有线网卡出站；手机会在收到 PLAY
-//! 后立即 TEARDOWN。这里在 Wi-Fi 的本地 IPv4 子网上添加一条更低跃点的持久路由：
+//! WFD 音频 TCP 会话的是 MiPlayCastService 子进程。若设置为无线广播但有线 + Wi-Fi
+//! 位于同一 IPv4 子网，Windows 会因有线跃点更低而让该会话从有线网卡出站；
+//! 手机看到 PLAY 请求的来源 IP 与发现身份不一致，会立即 TEARDOWN。
+//! 这里在 Wi-Fi 的本地 IPv4 子网上添加一条更低跃点的持久路由：
 //! 它仅覆盖局域网对端，默认路由仍可继续走有线。
 
 use anyhow::{Context, Result, anyhow, bail};

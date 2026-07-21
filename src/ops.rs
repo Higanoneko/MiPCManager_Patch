@@ -235,6 +235,13 @@ pub fn apply_audio(
 }
 
 /// 应用音频补丁，并允许 CLI 显式关闭 Wi-Fi 本地子网路由修复。
+///
+/// 路由修复仅在 WiFi 模式下需要：当有线 + Wi-Fi 位于同一子网时，有线因跃点更低会抢走
+/// 音频媒体会话的出站流量，导致会话来源 IP 与发现身份不一致，手机立即 TEARDOWN。
+/// 在 Wi-Fi 子网上添加 metric=1 的持久路由可强制媒体会话走 Wi-Fi。
+///
+/// 有线模式下无需路由修复：发现身份已切换为有线 MAC，默认路由自然走有线（有线跃点更低），
+/// 两者一致。
 pub fn apply_audio_with_options(
     mode: BroadcastMode,
     dir: Option<PathBuf>,
@@ -260,22 +267,23 @@ pub fn apply_audio_with_options(
     }
     log.push("  （三处网卡身份已统一 → 手机端应为单设备）".to_string());
     match (mode, no_wifi_local_route) {
-        (BroadcastMode::Wired, false) => match audio_wifi_route::apply(&dir)? {
+        (BroadcastMode::Wireless, false) => match audio_wifi_route::apply(&dir)? {
             Some(true) => log.push(
                 "  已添加 Wi-Fi 本地子网优先路由：音频会话走 Wi-Fi，本机默认流量仍走有线。"
                     .to_string(),
             ),
             Some(false) => log.push("  Wi-Fi 本地子网优先路由已存在。".to_string()),
             None => log.push(
-                "  未检测到可用 Wi-Fi IPv4 接口；已保留有线广播补丁，未添加本地路由。".to_string(),
+                "  未检测到可用 Wi-Fi IPv4 接口；已保留无线广播补丁，未添加本地路由。"
+                    .to_string(),
             ),
         },
-        (BroadcastMode::Wireless, _) => {
+        (BroadcastMode::Wired, _) => {
             if audio_wifi_route::revert(&dir)? {
-                log.push("  已移除此前为有线广播添加的 Wi-Fi 本地子网优先路由。".to_string());
+                log.push("  已移除 Wi-Fi 本地子网优先路由（有线模式下发现与媒体均走有线，无需此路由）。".to_string());
             }
         }
-        (BroadcastMode::Wired, true) => {}
+        (BroadcastMode::Wireless, true) => {}
     }
     log.push(RESTART_HINT.to_string());
     Ok(log)
