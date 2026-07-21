@@ -42,6 +42,14 @@ pub fn apply(version_dir: &Path, model: &str) -> Result<()> {
     Ok(())
 }
 
+/// 仅写入伪装机型注册表（安装包启动前用于绕过「暂不支持本设备」）。
+pub fn ensure_spoof_model(model: &str) -> Result<()> {
+    if model.trim().is_empty() {
+        bail!("机型代号不能为空");
+    }
+    set_registry(model.trim())
+}
+
 /// 将内嵌代理 DLL 释放到指定目录，必要时备份已有文件。
 pub fn deploy_proxy(target_dir: &Path) -> Result<std::path::PathBuf> {
     let target = target_dir.join(PROXY_DLL_NAME);
