@@ -274,7 +274,7 @@ impl eframe::App for PatchApp {
                                 });
                                 ui.add_space(8.0);
                                 ui.add_enabled_ui(self.full_features, |ui| {
-                                    action_row(ui, "双网卡音频 [实验性]", |ui| {
+                                    action_row(ui, "Lyra 实验性 [双网卡]", |ui| {
                                         if ghost_btn(ui, ink, line, "诊断").clicked() {
                                             let dir = match ops::resolve_full_version_dir() {
                                                 Ok(d) => d,
@@ -299,6 +299,24 @@ impl eframe::App for PatchApp {
                                             self.run_op(
                                                 "双网卡音频 · 修复",
                                                 mipcmanager_patch::audio_dual_nic::auto_fix(&dir),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(6.0);
+                                    action_row(ui, "Lyra 实验性 [SMBIOS]", |ui| {
+                                        let model = self.selected_model();
+                                        if primary_btn(ui, accent, "应用").clicked() {
+                                            self.run_op(
+                                                &format!("SMBIOS 设备身份 · 应用（{model}）"),
+                                                mipcmanager_patch::ops::apply_smbios(
+                                                    Some(&model), None, false,
+                                                ),
+                                            );
+                                        }
+                                        if ghost_btn(ui, ink, line, "还原").clicked() {
+                                            self.run_op(
+                                                "SMBIOS 设备身份 · 还原",
+                                                mipcmanager_patch::ops::revert_smbios(None, false),
                                             );
                                         }
                                     });
@@ -489,7 +507,11 @@ fn section_card(
         .corner_radius(14.0)
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            ui.expand_to_include_rect(ui.max_rect());
+            let max = ui.max_rect();
+            ui.expand_to_include_rect(egui::Rect::from_min_size(
+                max.min,
+                egui::vec2(max.width(), 0.0),
+            ));
             ui.label(
                 egui::RichText::new(title)
                     .size(14.0)

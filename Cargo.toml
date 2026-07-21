@@ -1,6 +1,6 @@
 [package]
 name = "mipcmanager_patch"
-version = "1.5.4"
+version = "1.5.5"
 edition = "2024"
 description = "小米电脑管家 (MiPCManager) 功能增强补丁工具：原生 DLL 字符串补丁 + .NET 方法体重定位补丁"
 
