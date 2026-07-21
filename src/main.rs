@@ -6,6 +6,7 @@
 //!   camera apply|revert   抑制「请确认摄像头状态」弹窗（PcControlCenter.dll）
 //!   audio  apply|revert   音频流转无线/有线广播模式（含双网卡媒体路由修复）
 //!   device apply|revert   设备伪装（释放 msimg32.dll + 注册表机型）
+//!   smbios apply|revert   [实验性] SMBIOS 设备身份伪装（micont_rtm.dll IAT Hook）
 //!   install           安装小米电脑管家 / 小米互联（搜索/下载安装包并按产品处理）
 //!
 //! 直接双击运行（无参数）时进入交互菜单。release exe 内嵌管理员权限 manifest，启动即触发 UAC。
@@ -13,7 +14,9 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use mipcmanager_patch::{audio_dual_nic, device_spoof, elevate, ops, pc_manager_installer};
+use mipcmanager_patch::{
+    audio_dual_nic, device_spoof, elevate, ops, pc_manager_installer, smbios_spoof,
+};
 use std::io::{Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 
@@ -53,6 +56,11 @@ enum Command {
     Device {
         #[command(subcommand)]
         action: DeviceAction,
+    },
+    /// [实验性] SMBIOS 设备身份伪装 — 妙播 / Lyra 特殊适配（micont_rtm.dll IAT Hook）
+    Smbios {
+        #[command(subcommand)]
+        action: SmbiosAction,
     },
     /// 安装小米电脑管家 / 小米互联（自动识别安装包所属产品）
     Install {
@@ -141,6 +149,28 @@ enum DeviceAction {
     },
 }
 
+#[derive(Subcommand, Clone)]
+enum SmbiosAction {
+    /// 应用 SMBIOS 设备身份伪装
+    Apply {
+        /// 机型代号（默认 TM2424）
+        #[arg(long, default_value = smbios_spoof::DEFAULT_MODEL)]
+        model: String,
+        /// 指定目标 DLL 路径（默认自动探测安装目录）
+        #[arg(long)]
+        dll: Option<PathBuf>,
+        #[arg(long)]
+        no_kill: bool,
+    },
+    /// 还原 SMBIOS 设备身份伪装
+    Revert {
+        #[arg(long)]
+        dll: Option<PathBuf>,
+        #[arg(long)]
+        no_kill: bool,
+    },
+}
+
 #[derive(ValueEnum, Clone, Copy)]
 enum ModeArg {
     Wifi,
@@ -224,9 +254,7 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
             AudioAction::ExperimentalFix { dry_run, dir } => {
-                let dir = dir
-                    .map(Ok)
-                    .unwrap_or_else(ops::resolve_full_version_dir)?;
+                let dir = dir.map(Ok).unwrap_or_else(ops::resolve_full_version_dir)?;
                 if dry_run {
                     print_log(audio_dual_nic::diagnose(&dir)?);
                 } else {
@@ -246,6 +274,20 @@ fn run(cmd: Command) -> Result<()> {
             }
             DeviceAction::Revert { dir, no_kill } => {
                 print_log(ops::revert_device(dir, no_kill)?);
+                Ok(())
+            }
+        },
+        Command::Smbios { action } => match action {
+            SmbiosAction::Apply {
+                model,
+                dll,
+                no_kill,
+            } => {
+                print_log(ops::apply_smbios(Some(&model), dll, no_kill)?);
+                Ok(())
+            }
+            SmbiosAction::Revert { dll, no_kill } => {
+                print_log(ops::revert_smbios(dll, no_kill)?);
                 Ok(())
             }
         },
@@ -361,7 +403,8 @@ fn interactive_menu() -> Result<()> {
         println!("  3) 抑制摄像头弹窗{unavailable}");
         println!("  4) 音频流转增强{unavailable}");
         println!("  5) 设备伪装{unavailable}");
-        println!("  6) 安装小米电脑管家 / 小米互联");
+        println!("  6) [实验性] Lyra 特殊适配{unavailable}");
+        println!("  7) 安装小米电脑管家 / 小米互联");
         println!("  0) 退出");
         match prompt("请选择：")?.as_str() {
             "1" => run_logged(run(Command::Status)),
@@ -369,8 +412,9 @@ fn interactive_menu() -> Result<()> {
             "3" if full_features_available => menu_camera(),
             "4" if full_features_available => menu_audio(),
             "5" if full_features_available => menu_device(),
-            "3" | "4" | "5" => println!("PcContinuity 暂时仅支持地区伪装。"),
-            "6" => {
+            "6" if full_features_available => menu_lyra_experiment(),
+            "3" | "4" | "5" | "6" => println!("PcContinuity 暂时仅支持地区伪装。"),
+            "7" => {
                 run_logged(run(Command::Install {
                     installer: None,
                     url: None,
@@ -490,6 +534,52 @@ fn menu_device() {
         })),
         _ => {}
     }
+}
+
+fn menu_lyra_experiment() {
+    println!("\n-- [实验性] Lyra 特殊适配 --");
+    println!("  1) 双网卡音频诊断");
+    println!("  2) 双网卡音频修复");
+    println!("  3) SMBIOS 设备身份 · 应用");
+    println!("  4) SMBIOS 设备身份 · 还原");
+    println!("  0) 返回");
+    let action = {
+        match read_choice() {
+            "1" => AudioAction::ExperimentalFix {
+                dry_run: true,
+                dir: None,
+            },
+            "2" => AudioAction::ExperimentalFix {
+                dry_run: false,
+                dir: None,
+            },
+            "3" => {
+                let model = match choose_model() {
+                    Some(m) => m,
+                    None => return,
+                };
+                run_logged(run(Command::Smbios {
+                    action: SmbiosAction::Apply {
+                        model,
+                        dll: None,
+                        no_kill: false,
+                    },
+                }));
+                return;
+            }
+            "4" => {
+                run_logged(run(Command::Smbios {
+                    action: SmbiosAction::Revert {
+                        dll: None,
+                        no_kill: false,
+                    },
+                }));
+                return;
+            }
+            _ => return,
+        }
+    };
+    run_logged(run(Command::Audio { action }));
 }
 
 /// 让用户选择伪装机型，返回机型代号。

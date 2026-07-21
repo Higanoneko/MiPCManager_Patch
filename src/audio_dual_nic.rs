@@ -57,13 +57,17 @@ pub fn diagnose(version_dir: &Path) -> Result<Vec<String>> {
             true
         }
         (true, _, false) => {
-            log.push("  ✗ 无线广播模式但 Wi-Fi 路由缺失 —— 同网段时媒体可能从有线出站，手机将拒绝。"
-                .to_string());
+            log.push(
+                "  ✗ 无线广播模式但 Wi-Fi 路由缺失 —— 同网段时媒体可能从有线出站，手机将拒绝。"
+                    .to_string(),
+            );
             false
         }
         (_, true, true) => {
-            log.push("  ✗ 有线广播模式但 Wi-Fi 路由仍存在 —— 发现走有线、媒体走 Wi-Fi，手机将拒绝。"
-                .to_string());
+            log.push(
+                "  ✗ 有线广播模式但 Wi-Fi 路由仍存在 —— 发现走有线、媒体走 Wi-Fi，手机将拒绝。"
+                    .to_string(),
+            );
             false
         }
         _ => {
@@ -113,14 +117,15 @@ pub fn auto_fix(version_dir: &Path) -> Result<Vec<String>> {
             ),
             Some(false) => log.push("  • Wi-Fi 本地子网优先路由已存在，无需操作。".to_string()),
             None => log.push(
-                "  ✗ 未检测到可用 Wi-Fi IPv4 接口，无法添加路由。请确认 Wi-Fi 已连接。"
-                    .to_string(),
+                "  ✗ 未检测到可用 Wi-Fi IPv4 接口，无法添加路由。请确认 Wi-Fi 已连接。".to_string(),
             ),
         }
     } else {
         let removed = audio_wifi_route::revert(version_dir)?;
         if removed {
-            log.push("  ✓ 已移除 Wi-Fi 本地子网优先路由：有线模式下发现与媒体均走有线。".to_string());
+            log.push(
+                "  ✓ 已移除 Wi-Fi 本地子网优先路由：有线模式下发现与媒体均走有线。".to_string(),
+            );
         } else {
             log.push("  • 不存在本工具管理的 Wi-Fi 路由，无需操作。".to_string());
         }

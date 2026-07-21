@@ -14,3 +14,6 @@ pub mod locale_spoof;
 pub mod mipcaudio_lan;
 pub mod ops;
 pub mod pc_manager_installer;
+pub mod smbios;
+pub mod smbios_spoof;
+pub mod x64_trampoline;

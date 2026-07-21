@@ -5,7 +5,7 @@
 
 use crate::{
     audio_wifi_route, camera_toast, device_spoof, dotnet, install, locale_spoof, mipcaudio_lan,
-    pc_manager_installer,
+    pc_manager_installer, smbios_spoof,
 };
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -43,6 +43,7 @@ pub const PROC_LOCALE: &[&str] = &["micont_service"];
 pub const PROC_CAMERA: &[&str] = &["XiaomiPcManager"];
 pub const PROC_AUDIO: &[&str] = &["MiPCAudio", "MiPlayCastService", "MAFSvr", "MASFvr"];
 pub const PROC_DEVICE: &[&str] = &["XiaomiPcManager"];
+pub const PROC_SMBIOS: &[&str] = &["micont_service"];
 
 const RESTART_HINT: &str = "提示：补丁已完成，请手动重新启动小米电脑管家使其生效。";
 
@@ -129,6 +130,13 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
                 "     msimg32.dll: {} | 注册表机型: {}",
                 if dll_ok { "已就位" } else { "未就位" },
                 model.unwrap_or_else(|| "未设置".to_string())
+            ));
+            out.push("  -- [实验性] Lyra 特殊适配 --".to_string());
+            let smbios_dll = version.join(smbios_spoof::TARGET_DLL);
+            let smbios_ok = smbios_dll.exists() && smbios_spoof::is_patched(&smbios_dll);
+            out.push(format!(
+                "     SMBIOS 设备身份: {}",
+                if smbios_ok { "已就位" } else { "未就位" }
             ));
         }
         Err(error) => out.push(format!("（无法确定版本目录：{error}）")),
@@ -274,13 +282,15 @@ pub fn apply_audio_with_options(
             ),
             Some(false) => log.push("  Wi-Fi 本地子网优先路由已存在。".to_string()),
             None => log.push(
-                "  未检测到可用 Wi-Fi IPv4 接口；已保留无线广播补丁，未添加本地路由。"
-                    .to_string(),
+                "  未检测到可用 Wi-Fi IPv4 接口；已保留无线广播补丁，未添加本地路由。".to_string(),
             ),
         },
         (BroadcastMode::Wired, _) => {
             if audio_wifi_route::revert(&dir)? {
-                log.push("  已移除 Wi-Fi 本地子网优先路由（有线模式下发现与媒体均走有线，无需此路由）。".to_string());
+                log.push(
+                    "  已移除 Wi-Fi 本地子网优先路由（有线模式下发现与媒体均走有线，无需此路由）。"
+                        .to_string(),
+                );
             }
         }
         (BroadcastMode::Wireless, true) => {}
@@ -328,6 +338,41 @@ pub fn revert_device(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
     close_apps(PROC_DEVICE, no_kill, &mut log);
     retry_patch_after_access_denied(PROC_DEVICE, &mut log, || device_spoof::revert(&dir))?;
     log.push("✓ 已还原设备伪装（移除 msimg32.dll 与注册表机型）".to_string());
+    log.push(RESTART_HINT.to_string());
+    Ok(log)
+}
+
+// ===================== SMBIOS 伪装 =====================
+
+pub fn apply_smbios(
+    model: Option<&str>,
+    dll: Option<PathBuf>,
+    no_kill: bool,
+) -> Result<Vec<String>> {
+    let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
+    let mut log = Vec::new();
+    close_apps_required(PROC_SMBIOS, no_kill, &mut log)?;
+    let outcome = retry_patch_after_access_denied(PROC_SMBIOS, &mut log, || {
+        smbios_spoof::apply(&path, model)
+    })?;
+    match outcome {
+        smbios_spoof::PatchOutcome::Patched => {
+            log.push(format!("✓ SMBIOS 设备身份补丁已应用：{}", path.display()));
+        }
+        smbios_spoof::PatchOutcome::AlreadyPatched => {
+            log.push(format!("• SMBIOS 已是补丁状态（跳过）：{}", path.display()));
+        }
+    }
+    log.push(RESTART_HINT.to_string());
+    Ok(log)
+}
+
+pub fn revert_smbios(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
+    let mut log = Vec::new();
+    close_apps_required(PROC_SMBIOS, no_kill, &mut log)?;
+    retry_patch_after_access_denied(PROC_SMBIOS, &mut log, || smbios_spoof::revert(&path))?;
+    log.push(format!("✓ 已还原 SMBIOS 设备身份补丁：{}", path.display()));
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
