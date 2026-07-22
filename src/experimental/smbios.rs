@@ -188,14 +188,15 @@ mod tests {
     fn make_fixture() -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Type 0: [0, 4, handle(2)]  + strings "A\0" "B\0" "\0"
-        data.extend_from_slice(&[0, 4, 0, 0, b'A', 0, b'B', 0, 0, 0]);
+        // Type 0: [0, 4, handle(2)]  + strings "A\0" "B\0" + double-null
+        data.extend_from_slice(&[0, 4, 0, 0, b'A', 0, b'B', 0, 0]);
 
         // Type 1: 27-byte header, mfr@+4=1, product@+5=2
         let t1: [u8; 27] = [
-            1, 0x1B, 0, 0, 0, 0, 0, 0, 0, 0, 1, // mfr = string #1
-            2, // product = string #2
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0x1B, 0, 0, // type, length, handle
+            1, // mfr = string #1 (at formatted offset 4)
+            2, // product = string #2 (at formatted offset 5)
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         data.extend_from_slice(&t1);
         data.extend_from_slice(b"System manufacturer\0");

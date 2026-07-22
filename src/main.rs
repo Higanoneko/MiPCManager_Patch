@@ -9,19 +9,21 @@
 //!   smbios apply|revert   [实验性] SMBIOS 设备身份伪装（micont_rtm.dll IAT Hook）
 //!   install           安装小米电脑管家 / 小米互联（搜索/下载安装包并按产品处理）
 //!
-//! 直接双击运行（无参数）时进入交互菜单。release exe 内嵌管理员权限 manifest，启动即触发 UAC。
+//! 直接双击运行（无参数）时进入 ratatui TUI 全屏界面。release exe 内嵌管理员权限 manifest，启动即触发 UAC。
 //! 所有补丁逻辑集中在 `mipcmanager_patch` 库中，CLI 与 GUI 共用。
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use mipcmanager_patch::{
-    audio_dual_nic, device_spoof, elevate, ops, pc_manager_installer, smbios_spoof,
+    elevate, ops,
+    experimental::{audio_dual_nic, smbios_spoof},
+    install::pc_manager_installer,
+    patches::device as device_spoof,
 };
-use std::io::{Write, stdin, stdout};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "mipcm_patch", about = "小米电脑管家功能增强补丁工具", version)]
+#[command(name = "MiPCM_CLI", about = "小米电脑管家功能增强补丁工具", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -196,7 +198,7 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Some(cmd) => run(cmd),
-        None => interactive_menu(),
+        None => mipcmanager_patch::ui::tui::run(),
     };
     if let Err(e) = result {
         eprintln!("错误：{e:#}");
@@ -338,6 +340,36 @@ fn choose_manager_installer(
     }
 }
 
+// ── 数据驱动的安装包选择菜单 ────────────────────────────────────
+
+/// 菜单动作：定义每个菜单项对应的业务逻辑。
+/// 新增菜单项时在此添加变体并在 [`INSTALLER_SOURCE_MENU`] 中注册。
+enum InstallerSourceAction {
+    DownloadUrl,
+    SpecifyPath,
+}
+
+/// 声明式菜单项：key 匹配用户输入，description 为显示文本，action 为对应逻辑。
+struct MenuEntry {
+    key: &'static str,
+    description: &'static str,
+    action: InstallerSourceAction,
+}
+
+/// 安装包来源选择菜单 — 新增选项只需在此切片追加一条记录。
+const INSTALLER_SOURCE_MENU: &[MenuEntry] = &[
+    MenuEntry {
+        key: "1",
+        description: "输入下载网址",
+        action: InstallerSourceAction::DownloadUrl,
+    },
+    MenuEntry {
+        key: "2",
+        description: "指定本地 .exe 安装包",
+        action: InstallerSourceAction::SpecifyPath,
+    },
+];
+
 fn prompt_installer_candidate(candidates: &[PathBuf]) -> Result<Option<PathBuf>> {
     println!("找到多个安装包：");
     for (index, path) in candidates.iter().enumerate() {
@@ -361,11 +393,17 @@ fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
     println!(
         "未在 Patcher 同目录找到安装包（小米电脑管家 `*_XiaomiPCManager_*.exe` 或小米互联 `小米互联*.exe`）。"
     );
-    println!("  1) 输入下载网址");
-    println!("  2) 指定本地 .exe 安装包");
+    for entry in INSTALLER_SOURCE_MENU {
+        println!("  {}) {}", entry.key, entry.description);
+    }
     println!("  0) 取消");
-    match prompt("请选择：")?.as_str() {
-        "1" => {
+    let choice = prompt("请选择：")?;
+    let action = INSTALLER_SOURCE_MENU
+        .iter()
+        .find(|e| e.key == choice)
+        .map(|e| &e.action);
+    match action {
+        Some(InstallerSourceAction::DownloadUrl) => {
             let url = prompt("请输入 HTTP(S) 下载地址：")?;
             if url.is_empty() {
                 return Ok(None);
@@ -373,7 +411,7 @@ fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
             println!("正在下载安装包到 {}", patcher_dir.display());
             pc_manager_installer::download_installer(&url, patcher_dir).map(Some)
         }
-        "2" => {
+        Some(InstallerSourceAction::SpecifyPath) => {
             let input = prompt("请输入 .exe 安装包路径：")?;
             let path = input.trim().trim_matches(['"', '\'']);
             if path.is_empty() {
@@ -382,273 +420,18 @@ fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
                 Ok(Some(PathBuf::from(path)))
             }
         }
-        "0" | "" => Ok(None),
-        _ => bail!("无效选择"),
+        None if choice == "0" || choice.is_empty() => Ok(None),
+        None => bail!("无效选择"),
     }
 }
 
-// ===================== 交互菜单 =====================
-
-fn interactive_menu() -> Result<()> {
-    loop {
-        let full_features_available = ops::full_features_available();
-        println!("\n=== 小米电脑管家增强补丁 ===");
-        println!("  1) 查看状态");
-        println!("  2) 地区伪装");
-        let unavailable = if full_features_available {
-            ""
-        } else {
-            "（当前安装不可用）"
-        };
-        println!("  3) 抑制摄像头弹窗{unavailable}");
-        println!("  4) 音频流转增强{unavailable}");
-        println!("  5) 设备伪装{unavailable}");
-        println!("  6) [实验性] Lyra 特殊适配{unavailable}");
-        println!("  7) 安装小米电脑管家 / 小米互联");
-        println!("  0) 退出");
-        match prompt("请选择：")?.as_str() {
-            "1" => run_logged(run(Command::Status)),
-            "2" => menu_locale(),
-            "3" if full_features_available => menu_camera(),
-            "4" if full_features_available => menu_audio(),
-            "5" if full_features_available => menu_device(),
-            "6" if full_features_available => menu_lyra_experiment(),
-            "3" | "4" | "5" | "6" => println!("PcContinuity 暂时仅支持地区伪装。"),
-            "7" => {
-                run_logged(run(Command::Install {
-                    installer: None,
-                    url: None,
-                }));
-            }
-            "0" | "q" | "exit" => break,
-            _ => println!("无效选择。"),
-        }
-    }
-    Ok(())
-}
-
-fn menu_locale() {
-    println!("\n-- 地区伪装 --");
-    println!("  1) 应用    2) 还原    0) 返回");
-    match read_choice() {
-        "1" => run_logged(run(Command::Locale {
-            action: PatchAction::Apply {
-                dll: None,
-                no_kill: false,
-            },
-            region: "CN".into(),
-            no_registry: false,
-        })),
-        "2" => run_logged(run(Command::Locale {
-            action: PatchAction::Revert {
-                dll: None,
-                no_kill: false,
-            },
-            region: "CN".into(),
-            no_registry: false,
-        })),
-        _ => {}
-    }
-}
-
-fn menu_camera() {
-    println!("\n-- 抑制摄像头弹窗 --");
-    println!("  1) 应用    2) 还原    0) 返回");
-    match read_choice() {
-        "1" => run_logged(run(Command::Camera {
-            action: PatchAction::Apply {
-                dll: None,
-                no_kill: false,
-            },
-        })),
-        "2" => run_logged(run(Command::Camera {
-            action: PatchAction::Revert {
-                dll: None,
-                no_kill: false,
-            },
-        })),
-        _ => {}
-    }
-}
-
-fn menu_audio() {
-    println!("\n-- 音频流转增强 --");
-    println!("  1) 切换为【无线 WiFi】广播");
-    println!("  2) 切换为【有线 LAN】广播");
-    println!("  3) 还原");
-    println!("  4) [实验性] 双网卡同网段音频诊断");
-    println!("  5) [实验性] 双网卡同网段音频修复");
-    println!("  0) 返回");
-    let action = match read_choice() {
-        "1" => AudioAction::Apply {
-            mode: ModeArg::Wifi,
-            dir: None,
-            no_kill: false,
-            no_wifi_local_route: false,
-        },
-        "2" => AudioAction::Apply {
-            mode: ModeArg::Lan,
-            dir: None,
-            no_kill: false,
-            no_wifi_local_route: false,
-        },
-        "3" => AudioAction::Revert {
-            dir: None,
-            no_kill: false,
-        },
-        "4" => AudioAction::ExperimentalFix {
-            dry_run: true,
-            dir: None,
-        },
-        "5" => AudioAction::ExperimentalFix {
-            dry_run: false,
-            dir: None,
-        },
-        _ => return,
-    };
-    run_logged(run(Command::Audio { action }));
-}
-
-fn menu_device() {
-    println!("\n-- 设备伪装 --");
-    println!("  1) 应用    2) 还原    0) 返回");
-    match read_choice() {
-        "1" => {
-            let model = match choose_model() {
-                Some(m) => m,
-                None => return,
-            };
-            run_logged(run(Command::Device {
-                action: DeviceAction::Apply {
-                    model,
-                    dir: None,
-                    no_kill: false,
-                },
-            }));
-        }
-        "2" => run_logged(run(Command::Device {
-            action: DeviceAction::Revert {
-                dir: None,
-                no_kill: false,
-            },
-        })),
-        _ => {}
-    }
-}
-
-fn menu_lyra_experiment() {
-    println!("\n-- [实验性] Lyra 特殊适配 --");
-    println!("  1) 双网卡音频诊断");
-    println!("  2) 双网卡音频修复");
-    println!("  3) SMBIOS 设备身份 · 应用");
-    println!("  4) SMBIOS 设备身份 · 还原");
-    println!("  0) 返回");
-    let action = {
-        match read_choice() {
-            "1" => AudioAction::ExperimentalFix {
-                dry_run: true,
-                dir: None,
-            },
-            "2" => AudioAction::ExperimentalFix {
-                dry_run: false,
-                dir: None,
-            },
-            "3" => {
-                let model = match choose_model() {
-                    Some(m) => m,
-                    None => return,
-                };
-                run_logged(run(Command::Smbios {
-                    action: SmbiosAction::Apply {
-                        model,
-                        dll: None,
-                        no_kill: false,
-                    },
-                }));
-                return;
-            }
-            "4" => {
-                run_logged(run(Command::Smbios {
-                    action: SmbiosAction::Revert {
-                        dll: None,
-                        no_kill: false,
-                    },
-                }));
-                return;
-            }
-            _ => return,
-        }
-    };
-    run_logged(run(Command::Audio { action }));
-}
-
-/// 让用户选择伪装机型，返回机型代号。
-fn choose_model() -> Option<String> {
-    println!("\n选择伪装机型：");
-    for (i, p) in device_spoof::PRESETS.iter().enumerate() {
-        let tag = if p.code == device_spoof::DEFAULT_MODEL {
-            "（默认）"
-        } else {
-            ""
-        };
-        println!("  {}) {} [{}]{}", i + 1, p.code, p.name, tag);
-    }
-    println!("  c) 自定义机型代号");
-    println!("  0) 返回");
-    let c = read_choice();
-    match c {
-        "0" => None,
-        "c" | "C" => {
-            let m = prompt("请输入机型代号：").ok()?;
-            if m.trim().is_empty() {
-                println!("机型代号为空，已取消。");
-                None
-            } else {
-                Some(m.trim().to_string())
-            }
-        }
-        other => match other.parse::<usize>() {
-            Ok(n) if n >= 1 && n <= device_spoof::PRESETS.len() => {
-                Some(device_spoof::PRESETS[n - 1].code.to_string())
-            }
-            _ => {
-                println!("无效选择。");
-                None
-            }
-        },
-    }
-}
-
-/// 打印提示并读取一行输入（去除首尾空白）。
 fn prompt(msg: &str) -> Result<String> {
+    use std::io::Write;
     print!("{msg}");
-    stdout().flush().ok();
+    std::io::stdout().flush().ok();
     let mut line = String::new();
-    stdin().read_line(&mut line)?;
+    std::io::stdin().read_line(&mut line)?;
     Ok(line.trim().to_string())
-}
-
-/// 读取菜单选择；读取失败时返回 "0"（视作返回）。
-fn read_choice() -> &'static str {
-    let s = prompt("请选择：").unwrap_or_default();
-    // 将常见输入映射为静态字符串，便于 match。
-    match s.as_str() {
-        "1" => "1",
-        "2" => "2",
-        "3" => "3",
-        "4" => "4",
-        "5" => "5",
-        "c" | "C" => "c",
-        "0" | "q" | "exit" | "" => "0",
-        _ => "?",
-    }
-}
-
-/// 执行一个操作并在出错时打印红色错误（用于菜单，不中断循环）。
-fn run_logged(r: Result<()>) {
-    if let Err(e) = r {
-        eprintln!("错误：{e:#}");
-    }
 }
 
 #[cfg(test)]
@@ -657,10 +440,10 @@ mod install_routing_tests {
 
     #[test]
     fn install_cli_accepts_exactly_one_package_source() {
-        assert!(Cli::try_parse_from(["mipcm_patch", "install"]).is_ok());
+        assert!(Cli::try_parse_from(["MiPCM_CLI", "install"]).is_ok());
         assert!(
             Cli::try_parse_from([
-                "mipcm_patch",
+                "MiPCM_CLI",
                 "install",
                 "--installer",
                 "XiaomiPCManager.exe"
@@ -669,7 +452,7 @@ mod install_routing_tests {
         );
         assert!(
             Cli::try_parse_from([
-                "mipcm_patch",
+                "MiPCM_CLI",
                 "install",
                 "--url",
                 "https://example.com/XiaomiPCManager.exe"
@@ -678,7 +461,7 @@ mod install_routing_tests {
         );
         assert!(
             Cli::try_parse_from([
-                "mipcm_patch",
+                "MiPCM_CLI",
                 "install",
                 "--installer",
                 "local.exe",

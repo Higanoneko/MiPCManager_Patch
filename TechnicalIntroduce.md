@@ -2,11 +2,36 @@
 
 本文档记录 MiPCManager Patcher 的补丁原理、定位方式、实现细节与构建说明。面向普通用户的功能说明见 [README.md](README.md)。
 
+## 项目概览
+
+工具提供两个前端入口，共享同一核心库：
+
+| 产物 | 入口 | 说明 |
+|---|---|---|
+| `MiPCM_GUI_v*.*.*.exe` | `src/ui/gui/main.rs` | egui 图形界面，支持拖放安装 |
+| `MiPCM_CLI_v*.*.*.exe` | `src/main.rs` | clap 命令行 + 交互菜单 |
+
+核心库 (`src/lib.rs`) 将各模块聚合为 `ops` 层的高层操作，确保两个前端调用完全相同的逻辑。
+
 ## 总体设计
 
-工具会自动探测 `XiaomiPCManager` 与 `PcContinuity` 的最新安装版本。完整版 `XiaomiPCManager` 保留启动时全量关闭相关进程的行为；`PcContinuity` 不做全量关闭，只在 LocaleSpoof 动作前处理 `micont_service.exe`。各补丁动作前会按功能关闭对应进程，备份原文件后再应用补丁。`PcContinuity` 暂时只具有 LocaleSpoof 能力，其他功能的自动解析和显式路径都会拒绝该安装目录。若 Patch/还原时遇到 access denied，会自动关闭对应进程并重试一次。所有补丁均幂等且可还原。
+工具自动探测 `XiaomiPCManager` 与 `PcContinuity` 的最新安装版本：
 
-补丁定位采用「特征锚点 / 类型名+方法名 / 指令块特征」而非硬编码偏移，因此可适配未来版本。修改 `Program Files` 下文件需管理员权限，release exe 内嵌 `requireAdministrator` manifest，双击启动即弹 UAC，运行时仍保留提权兜底。
+- **XiaomiPCManager**（完整版）：位于 `C:\Program Files\MI\XiaomiPCManager`，支持所有补丁功能。工具启动时自动关闭其相关进程。
+- **PcContinuity**（小米互联）：位于 `C:\Program Files\MI\PcContinuity`，目前**仅支持地区伪装**。不做启动时全量进程关闭。
+
+各补丁动作执行前按功能关闭对应进程作为兜底：
+
+| 补丁 | 关闭进程 |
+|---|---|
+| 地区伪装 | `micont_service.exe` |
+| 摄像头弹窗 | `XiaomiPcManager.exe` |
+| 音频流转 | `MiPCAudio.exe`、`MiPlayCastService.exe`、`MAFSvr.exe` |
+| 设备伪装 | `XiaomiPcManager.exe` |
+
+补丁前自动备份原文件（`.orig` 后缀），所有补丁幂等且可还原。若 Patch/还原时遇到 access denied 错误（`os error 5`），会自动关闭对应进程并重试一次。
+
+修改 `Program Files` 下文件需管理员权限，release exe 内嵌 `requireAdministrator` manifest，双击启动即弹 UAC，运行时仍保留提权兜底。可通过环境变量 `MIPCM_NO_ELEVATE=1` 跳过运行时提权兜底（但 Release manifest 强制提权不会被跳过）。
 
 ## 补丁一：LocaleSpoof（地区伪装）
 
@@ -22,7 +47,14 @@
 
 **实现**：以宽字符串 `Geo\0` 作锚点，把其后 10 字节的 `Name\0\0` 等长替换为 `XCN\0\0`（不移位、不依赖偏移）。本工具输出与作者黄金参考 `micont_rtm.patched.dll` 逐字节一致（已验证）。
 
-代码：[`src/locale_spoof.rs`](src/locale_spoof.rs)
+**自动探测**：优先使用 `XiaomiPCManager` 的最新版本；如未找到可用目标，则使用 `PcContinuity` 的最新版本。
+
+**命令行选项**：
+- `--region`：指定地区值，默认 `CN`
+- `--no-registry`：不写入地区注册表值
+- `--no-kill`：不自动关闭相关进程
+
+代码：[`src/patches/locale_spoof.rs`](src/patches/locale_spoof.rs)
 
 > 实现思路：感谢 Coolapk@Na1veMagic
 
@@ -45,13 +77,13 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 注入需要的字符串/常量（枚举值 3 是 IL 立即数）无需向元数据堆新增任何条目，所以避开了「纯 Rust 元数据写库无法回写大型 WinRT 程序集」的难题。由于注入使方法体增长、无法原地扩展，工具的做法是：
 
-1. 纯 Rust 解析 ECMA-335 元数据，按「类型名 + 方法名后缀」定位 `MethodDef`，取得方法体 RVA 与 RVA 字段的文件偏移（[`src/dotnet/metadata.rs`](src/dotnet/metadata.rs)）。
-2. 解析方法体（fat/tiny 头、EH 段），在 IL 前拼接 5 字节守卫 `ldarg.1; ldc.i4.3; bne.un.s +1; ret`，必要时整体修正 EH 偏移（[`src/dotnet/method_body.rs`](src/dotnet/method_body.rs)）。
-3. 追加一个新节 `.mipatch` 写入新方法体，丢弃失效的 Authenticode 证书、维护 `SizeOfImage`、重算 PE 校验和，并把 `MethodDef.RVA` 改指到新节（[`src/dotnet/pe.rs`](src/dotnet/pe.rs)）。
+1. 纯 Rust 解析 ECMA-335 元数据，按「类型名 + 方法名后缀」定位 `MethodDef`，取得方法体 RVA 与 RVA 字段的文件偏移（[`src/infra/dotnet/metadata.rs`](src/infra/dotnet/metadata.rs)）。
+2. 解析方法体（fat/tiny 头、EH 段），在 IL 前拼接 5 字节守卫 `ldarg.1; ldc.i4.3; bne.un.s +1; ret`，必要时整体修正 EH 偏移（[`src/infra/dotnet/method_body.rs`](src/infra/dotnet/method_body.rs)）。
+3. 追加一个新节 `.mipatch` 写入新方法体，丢弃失效的 Authenticode 证书、维护 `SizeOfImage`、重算 PE 校验和，并把 `MethodDef.RVA` 改指到新节（[`src/infra/dotnet/pe.rs`](src/infra/dotnet/pe.rs)）。
 
 **验证**：补丁后程序集可被 ILSpy 正常反编译，`ExceptionCallback` 反编译结果即为上述守卫；PE 结构、元数据、方法体头部（codesize/maxstack/局部签名）均合法；重复执行幂等。
 
-代码：[`src/camera_toast.rs`](src/camera_toast.rs)、[`src/dotnet/`](src/dotnet/)
+代码：[`src/patches/camera_toast.rs`](src/patches/camera_toast.rs)、[`src/infra/dotnet/`](src/infra/dotnet/)
 
 ## 补丁三：MiPCAudio 音频流转「无线 / 有线」模式
 
@@ -82,7 +114,12 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 定位采用指令块特征（含其后的 `jne`，保证唯一）而非硬编码偏移，已在版本升级（5.8.0.14 -> 5.8.0.74）后验证仍精确命中。等长字节替换、幂等、可还原；WiFi 态输出与出厂逐字节一致。
 
-代码：[`src/mipcaudio_lan.rs`](src/mipcaudio_lan.rs)
+**命令行选项**：
+- `--mode wifi|lan`：选择网络介质
+- `--no-wifi-local-route`：有线广播时不添加 Wi-Fi 本地子网优先路由
+- `--no-kill`：不自动关闭相关进程
+
+代码：[`src/patches/mipcaudio_lan.rs`](src/patches/mipcaudio_lan.rs)
 
 ## 补丁四：设备伪装（DeviceSpoof）
 
@@ -90,24 +127,71 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 **原理**：利用 DLL 搜索顺序，同目录的 `msimg32.dll` 优先于系统目录被加载。该代理 DLL 读取 `HKCU\Software\SmartSharePatch\SpoofDevice` 的机型代号并据此伪装本机型号。
 
-**实现**：`msimg32.dll` 已通过 `include_bytes!` 内嵌进编译产物，应用时直接释放到版本目录，无需附带文件；同时写入注册表机型代号。还原时删除该 DLL 并移除注册表项（若原目录本就存在同名文件，则在应用时备份、还原时恢复）。
+**实现**：`msimg32.dll` 已通过 `include_bytes!` 内嵌进编译产物（`src/infra/dlls/msimg32.dll`），应用时直接释放到版本目录，无需附带文件；同时写入注册表机型代号。还原时删除该 DLL 并移除注册表项（若原目录本就存在同名文件，则在应用时备份、还原时恢复）。
 
-预置机型（亦可 `--model` 自定义任意代号）：
+**预置机型**（亦可 `--model` 自定义任意代号）：
 
 | 代号 | 机型 |
 |---|---|
 | `TM2424`（默认） | Xiaomi Book Pro 14 (2026) |
 | `TM2309` | Redmi Book 16 (2024) |
 
-代码：[`src/device_spoof.rs`](src/device_spoof.rs)
+**命令行选项**：
+- `--model`：指定伪装机型，默认 `TM2424`
 
-> dll来源 @ChsBuffer
+代码：[`src/patches/device_spoof.rs`](src/patches/device_spoof.rs)
+
+> DLL 来源：@ChsBuffer
 
 ## 安装小米电脑管家
 
-安装入口仅在未检测到 `PcContinuity` 时可用。工具优先扫描 Patcher 可执行文件同目录的 `*_XiaomiPCManager_*.exe`；也可接受本地 `.exe` 路径，或调用 Windows PowerShell `Invoke-WebRequest` 将 HTTP(S) URL 下载到该目录。URL 与目标路径通过子进程环境变量传入，不会拼接到 PowerShell 脚本中。下载先写入 `.download.tmp` 临时文件，成功后再重命名，避免保留不完整安装包。
+安装入口仅在未检测到 `PcContinuity` 时可用（官方不允许两者同时安装）。工具优先扫描 Patcher 可执行文件同目录的 `*_XiaomiPCManager_*.exe`；找到一个时直接使用，找到多个时请用户选择。如未找到，则提示输入 HTTP(S) 网址或本地 `.exe` 路径。
 
 启动安装包前，复用 DeviceSpoof 的内嵌代理释放逻辑，将 `msimg32.dll` 写入安装包同目录。若目标已存在且内容不同，会先创建 `.orig.bak` 备份。
+
+**URL 下载**：调用 Windows PowerShell `Invoke-WebRequest`，URL 通过子进程环境变量传入（不拼接到 PowerShell 脚本中）。下载先写入 `.download.tmp` 临时文件，成功后再重命名，避免保留不完整安装包。
+
+**命令行选项**：
+- `--installer <exe>`：显式指定安装包路径
+- `--url <url>`：通过 HTTP(S) 下载安装包
+
+## GUI 实现
+
+GUI 使用 egui + eframe 的 glow 后端构建，轻量且体积可控。主要布局：
+
+- **安装状态区**：显示当前安装位置和各补丁状态
+- **补丁操作区**：应用 / 还原按钮，含机型选择下拉框和自定义输入
+- **安装拖放区**：支持拖入 `.exe` 安装包
+- **日志区**：实时显示操作日志
+
+窗口尺寸 760×1050，最小 640×820，居中显示。通过 `ico` crate 解析 `assets/MiPCManager.ico` 作为窗口图标。
+
+## 代码结构
+
+```
+src/
+├── lib.rs              # 核心库入口，聚合各模块
+├── ops.rs              # 高层操作（apply/revert/status）
+├── elevate.rs          # 管理员提权兜底
+├── infra/
+│   ├── dotnet/         # ECMA-335 元数据解析、方法体注入、PE 重写
+│   └── dlls/           # 内嵌 DLL 资源
+├── patches/
+│   ├── locale_spoof.rs      # 地区伪装
+│   ├── camera_toast.rs      # 摄像头弹窗抑制
+│   ├── mipcaudio_lan.rs     # 音频流转
+│   └── device_spoof.rs      # 设备伪装
+├── install/
+│   └── mod.rs          # 安装逻辑
+├── experimental/
+│   └── mod.rs          # 实验性功能（双网卡修复、SMBIOS 伪装）
+├── ui/
+│   ├── gui/main.rs     # egui 图形界面
+│   ├── tui.rs          # ratatui 终端 UI
+│   └── mod.rs
+├── main.rs             # CLI 入口
+└── bin/                # 命令行解析
+```
 
 ## 构建
 
@@ -116,8 +200,21 @@ cargo build --release
 cargo test
 ```
 
-release 产物路径为 `target/release/mipcm_patch.exe`。
+release 产物路径：
+- `target/release/MiPCM_CLI.exe`
+- `target/release/MiPCM_GUI.exe`
 
-release 产物会嵌入 `resources/mipcm_patch.exe.manifest`，其中声明 `requestedExecutionLevel=requireAdministrator`。因此从资源管理器双击 `mipcm_patch.exe` 时，Windows 会在程序启动前弹出 UAC。
+release 产物会嵌入 `resources/mipcm_patch.exe.manifest` 与 `resources/mipcm_gui.exe.manifest`，其中声明 `requestedExecutionLevel=requireAdministrator`。因此从资源管理器双击 exe 时，Windows 会在程序启动前弹出 UAC。
 
-> 注：`src/device_spoof.rs` 通过 `include_bytes!` 内嵌 `src/dlls/msimg32.dll`，构建时该文件需存在。
+构建时 `src/patches/device_spoof.rs` 通过 `include_bytes!` 内嵌 `src/infra/dlls/msimg32.dll`，该文件需存在。
+
+可通过 `MIPCM_SKIP_GUI_MANIFEST=1` 跳过 GUI manifest 嵌入（使用 `mipcm_gui_test.rc`，不强制管理员，便于本机无 UAC 冒烟测试）。
+
+**构建配置**（`Cargo.toml` release profile）：
+
+| 选项 | 值 | 说明 |
+|---|---|---|
+| `opt-level` | `z` | 优化体积 |
+| `lto` | `true` | 链接时优化 |
+| `strip` | `true` | 剥离调试符号 |
+| `panic` | `abort` | 减少 unwind 代码 |

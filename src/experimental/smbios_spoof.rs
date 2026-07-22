@@ -9,8 +9,9 @@
 //!
 //! 与 LocaleSpoof 均修改 `micont_rtm.dll`，互不冲突。
 
-use crate::dotnet::pe::PeImage;
-use crate::{install, smbios, x64_trampoline};
+use crate::infra::pe::PeImage;
+use crate::install;
+use super::{smbios, x64_trampoline};
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 

@@ -77,7 +77,8 @@ pub fn build_trampoline(iat_rva: u32, entries: &[ReplaceEntry]) -> TrampolineCod
     let mut jmp_patches: Vec<(usize, usize)> = Vec::new();
 
     for entry in entries.iter() {
-        let len = entry.verify.len() as u32;
+        let verify_len = entry.verify.len() as u32;
+        let replace_len = entry.replace.len().min(entry.verify.len());
 
         // lea rcx, [rdi + offset]
         code.push(0x48);
@@ -85,7 +86,7 @@ pub fn build_trampoline(iat_rva: u32, entries: &[ReplaceEntry]) -> TrampolineCod
         code.push(0x8F);
         code.extend_from_slice(&entry.offset.to_le_bytes());
 
-        for b_idx in 0..len as usize {
+        for b_idx in 0..verify_len as usize {
             let b = entry.verify[b_idx];
             if b_idx < 128 {
                 code.extend_from_slice(&[0x80, 0x79, b_idx as u8, b]);
@@ -99,7 +100,7 @@ pub fn build_trampoline(iat_rva: u32, entries: &[ReplaceEntry]) -> TrampolineCod
             jmp_patches.push((p + 2, 0)); // disp32 position = p+2
         }
 
-        for b_idx in 0..len as usize {
+        for b_idx in 0..replace_len {
             let b = entry.replace[b_idx];
             if b_idx < 128 {
                 code.extend_from_slice(&[0xC6, 0x41, b_idx as u8, b]);
@@ -111,7 +112,7 @@ pub fn build_trampoline(iat_rva: u32, entries: &[ReplaceEntry]) -> TrampolineCod
         }
 
         let block_end = code.len();
-        for _ in 0..len {
+        for _ in 0..verify_len as usize {
             let (pos, _) = jmp_patches.pop().expect("jmp_patches underflow");
             jmp_patches.push((pos, block_end));
         }

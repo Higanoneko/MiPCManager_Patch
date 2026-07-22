@@ -1,5 +1,7 @@
 //! 小米电脑管家安装目录定位、版本目录解析、进程关闭与文件备份/还原。
 
+pub mod pc_manager_installer;
+
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};

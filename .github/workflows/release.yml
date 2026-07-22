@@ -72,29 +72,24 @@ jobs:
 
           "version=$releaseVersion" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          "cli_asset=MiPCM_Patch_CLI_v$releaseVersion.exe" >> $env:GITHUB_OUTPUT
-          "gui_asset=MiPCM_Patch_GUI_v$releaseVersion.exe" >> $env:GITHUB_OUTPUT
-          Write-Host "Cargo.toml / Release version: $releaseVersion"
-          Write-Host "Assets: MiPCM_Patch_CLI_v$releaseVersion.exe , MiPCM_Patch_GUI_v$releaseVersion.exe"
+          Write-Host "Cargo.toml version: $releaseVersion"
 
       - name: Build release binaries
         shell: pwsh
-        run: cargo build --release --bin mipcm_patch --bin mipcm_gui
+        run: cargo build --release --bin MiPCM_CLI --bin MiPCM_GUI
 
       - name: Stage release assets
         id: artifact
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          CLI_ASSET: ${{ steps.version.outputs.cli_asset }}
-          GUI_ASSET: ${{ steps.version.outputs.gui_asset }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           $outDir = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
           $assets = @(
-            @{ Source = 'target\release\mipcm_patch.exe'; Name = $env:CLI_ASSET },
-            @{ Source = 'target\release\mipcm_gui.exe';   Name = $env:GUI_ASSET }
+            @{ Source = "target\release\MiPCM_CLI.exe"; Name = "MiPCM_CLI_v$env:VERSION.exe" },
+            @{ Source = "target\release\MiPCM_GUI.exe"; Name = "MiPCM_GUI_v$env:VERSION.exe" }
           )
 
           foreach ($asset in $assets) {
@@ -131,8 +126,8 @@ jobs:
           $lines.Add('')
           $lines.Add('### 产物')
           $lines.Add('')
-          $lines.Add("- ``MiPCM_Patch_CLI_v$env:RELEASE_VERSION.exe``")
-          $lines.Add("- ``MiPCM_Patch_GUI_v$env:RELEASE_VERSION.exe``")
+          $lines.Add("- ``MiPCM_CLI_v$env:RELEASE_VERSION.exe``")
+          $lines.Add("- ``MiPCM_GUI_v$env:RELEASE_VERSION.exe``")
           $lines.Add('')
           $lines.Add('### 更新日志')
           $lines.Add('')
@@ -161,13 +156,11 @@ jobs:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           ASSET_DIR: ${{ steps.artifact.outputs.dir }}
-          CLI_ASSET: ${{ steps.version.outputs.cli_asset }}
-          GUI_ASSET: ${{ steps.version.outputs.gui_asset }}
           NOTES_PATH: ${{ steps.changelog.outputs.path }}
         run: |
           $assets = @(
-            (Join-Path $env:ASSET_DIR $env:CLI_ASSET),
-            (Join-Path $env:ASSET_DIR $env:GUI_ASSET)
+            (Join-Path $env:ASSET_DIR "MiPCM_CLI_v$env:RELEASE_VERSION.exe"),
+            (Join-Path $env:ASSET_DIR "MiPCM_GUI_v$env:RELEASE_VERSION.exe")
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {

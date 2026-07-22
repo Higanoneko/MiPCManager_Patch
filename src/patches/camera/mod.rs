@@ -1,5 +1,7 @@
-use crate::dotnet::{InjectOutcome, inject_guard_return, pe::PeImage};
-use crate::install;
+pub mod dotnet;
+
+use self::dotnet::{InjectOutcome, inject_guard_return};
+use crate::{infra::pe::PeImage, install};
 use anyhow::Result;
 use std::path::Path;
 

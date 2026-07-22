@@ -7,23 +7,23 @@
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("mipcm_gui 仅支持 Windows。");
+    eprintln!("MiPCM_GUI 仅支持 Windows。");
 }
 
 #[cfg(windows)]
 fn load_app_icon() -> std::sync::Arc<egui::IconData> {
-    let ico_bytes = include_bytes!("../../assets/MiPCManager.ico");
+    let ico_bytes = include_bytes!("../../../assets/MiPCManager.ico");
     let Ok(icon_dir) = ico::IconDir::read(std::io::Cursor::new(ico_bytes.as_ref())) else {
         return std::sync::Arc::new(egui::IconData::default());
     };
-    if let Some(entry) = icon_dir.entries().first() {
-        if let Ok(image) = entry.decode() {
-            return std::sync::Arc::new(egui::IconData {
-                rgba: image.rgba_data().to_vec(),
-                width: image.width(),
-                height: image.height(),
-            });
-        }
+    if let Some(entry) = icon_dir.entries().first()
+        && let Ok(image) = entry.decode()
+    {
+        return std::sync::Arc::new(egui::IconData {
+            rgba: image.rgba_data().to_vec(),
+            width: image.width(),
+            height: image.height(),
+        });
     }
     std::sync::Arc::new(egui::IconData::default())
 }
@@ -113,7 +113,7 @@ impl PatchApp {
     }
 
     fn selected_model(&self) -> String {
-        use mipcmanager_patch::device_spoof;
+        use mipcmanager_patch::patches::device as device_spoof;
         let custom = self.custom_model.trim();
         if !custom.is_empty() {
             return custom.to_string();
@@ -134,7 +134,7 @@ impl PatchApp {
 #[cfg(windows)]
 impl eframe::App for PatchApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        use mipcmanager_patch::{device_spoof, ops};
+        use mipcmanager_patch::{ops, patches::device as device_spoof};
 
         let ctx = ui.ctx().clone();
         let dropped: Vec<_> = ctx.input(|i| {
@@ -285,7 +285,7 @@ impl eframe::App for PatchApp {
                                             };
                                             self.run_op(
                                                 "双网卡音频 · 诊断",
-                                                mipcmanager_patch::audio_dual_nic::diagnose(&dir),
+                                                mipcmanager_patch::experimental::audio_dual_nic::diagnose(&dir),
                                             );
                                         }
                                         if primary_btn(ui, accent, "修复").clicked() {
@@ -298,7 +298,7 @@ impl eframe::App for PatchApp {
                                             };
                                             self.run_op(
                                                 "双网卡音频 · 修复",
-                                                mipcmanager_patch::audio_dual_nic::auto_fix(&dir),
+                                                mipcmanager_patch::experimental::audio_dual_nic::auto_fix(&dir),
                                             );
                                         }
                                     });
@@ -411,14 +411,13 @@ impl eframe::App for PatchApp {
                                 egui::FontId::proportional(15.0),
                                 if hovered { accent } else { muted },
                             );
-                            if response.clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
+                            if response.clicked()
+                                && let Some(path) = rfd::FileDialog::new()
                                     .add_filter("安装包", &["exe"])
                                     .set_title("选择小米电脑管家 / 小米互联安装包")
                                     .pick_file()
-                                {
-                                    self.install_path(path);
-                                }
+                            {
+                                self.install_path(path);
                             }
                         });
 

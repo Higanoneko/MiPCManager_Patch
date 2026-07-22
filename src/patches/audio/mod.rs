@@ -1,20 +1,175 @@
-//! 为「无线广播 + 有线同时在线」场景补足媒体会话的出接口选择。
+//! 音频流转补丁：统一 IfType 广播身份 + Wi-Fi 本地子网路由修复。
 //!
-//! MiPCAudio / idmruntime 中的 IfType 补丁只影响设备发现身份（MAC），真正建立
-//! WFD 音频 TCP 会话的是 MiPlayCastService 子进程。若设置为无线广播但有线 + Wi-Fi
-//! 位于同一 IPv4 子网，Windows 会因有线跃点更低而让该会话从有线网卡出站；
-//! 手机看到 PLAY 请求的来源 IP 与发现身份不一致，会立即 TEARDOWN。
-//! 这里在 Wi-Fi 的本地 IPv4 子网上添加一条更低跃点的持久路由：
-//! 它仅覆盖局域网对端，默认路由仍可继续走有线。
+//! MiPCAudio / idmruntime 中的 IfType 补丁控制设备发现时的广播身份（无线 MAC / 有线 MAC）。
+//! 但在无线广播且有线+Wi-Fi 位于同一 IPv4 子网时，Windows 会因有线跃点更低而将
+//! MiPlayCastService 的 WFD 音频 TCP 会话从有线网卡出站；手机看到 PLAY 请求的
+//! 来源 IP 与发现身份不一致，会立即 TEARDOWN。此时需在 Wi-Fi 子网上添加 metric=1
+//! 的持久路由，强制媒体会话走 Wi-Fi。
 
+use crate::{infra, install};
 use anyhow::{Context, Result, anyhow, bail};
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const STATE_FILE: &str = ".mipcm_audio_wifi_route";
-const ROUTE_METRIC: u32 = 1;
+// ── IfType 补丁（原 mipcaudio_lan）──────────────────────────────
+
+pub const TARGET_MIPCAUDIO: &str = "MiPCAudio.exe";
+pub const TARGET_IDMRUNTIME: &str = "idmruntime.dll";
+
+/// IF_TYPE_IEEE80211：无线。
+const IFTYPE_WIFI: u8 = 0x47;
+/// IF_TYPE_ETHERNET_CSMACD：有线。
+const IFTYPE_ETHERNET: u8 = 0x06;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BroadcastMode {
+    Wireless,
+    Wired,
+}
+
+impl BroadcastMode {
+    fn iftype(self) -> u8 {
+        match self {
+            BroadcastMode::Wireless => IFTYPE_WIFI,
+            BroadcastMode::Wired => IFTYPE_ETHERNET,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            BroadcastMode::Wireless => "无线 (WiFi)",
+            BroadcastMode::Wired => "有线 (LAN)",
+        }
+    }
+}
+
+/// 一处"选 WiFi 网卡"判定的指令块特征：
+/// 匹配 `prefix` ++ (值字节∈{0x47,0x06}) ++ `suffix`，待改写的就是中间那个值字节。
+struct Site {
+    file: &'static str,
+    prefix: &'static [u8],
+    suffix: &'static [u8],
+}
+
+/// 三处 IfType 选择器。`suffix` 取其后的条件跳转，确保特征唯一。
+const SITES: &[Site] = &[
+    // MiPCAudio.exe: cmp dword [r9+0x64], 0x47 ; jne (short)
+    Site {
+        file: TARGET_MIPCAUDIO,
+        prefix: &[0x41, 0x83, 0x79, 0x64],
+        suffix: &[0x75],
+    },
+    // idmruntime.dll: cmp dword [r14+0x64], 0x47 ; jne (near)
+    Site {
+        file: TARGET_IDMRUNTIME,
+        prefix: &[0x41, 0x83, 0x7e, 0x64],
+        suffix: &[0x0F, 0x85],
+    },
+    // idmruntime.dll: cmp dword [rbx+0x64], 0x47 ; jne (short)
+    Site {
+        file: TARGET_IDMRUNTIME,
+        prefix: &[0x83, 0x7b, 0x64],
+        suffix: &[0x75],
+    },
+];
+
+/// 单个文件的处理结果。
+#[derive(Default)]
+pub struct FileOutcome {
+    pub patched: usize,
+    pub already: usize,
+}
+
+/// 对单个文件应用模式（处理它名下的所有站点）。返回是否有实际改动。
+fn patch_file(path: &Path, sites: &[&Site], mode: BroadcastMode) -> Result<FileOutcome> {
+    install::ensure_backup(path)?;
+    let mut data = std::fs::read(path)?;
+    let target = mode.iftype();
+    let mut outcome = FileOutcome::default();
+    for site in sites {
+        let vi = infra::bytes::locate_single_byte(
+            &data,
+            site.prefix,
+            site.suffix,
+            &[IFTYPE_WIFI, IFTYPE_ETHERNET],
+        )?;
+        if data[vi] == target {
+            outcome.already += 1;
+        } else {
+            data[vi] = target;
+            outcome.patched += 1;
+        }
+    }
+    if outcome.patched > 0 {
+        install::write_file_atomic(path, &data)?;
+    }
+    Ok(outcome)
+}
+
+/// 应用广播模式：把三处选择器统一为所选介质。`version_dir` 为安装的版本目录。
+pub fn apply(version_dir: &Path, mode: BroadcastMode) -> Result<Vec<(String, FileOutcome)>> {
+    // 按文件分组站点，每个文件只读写一次。
+    let mut by_file: BTreeMap<&str, Vec<&Site>> = BTreeMap::new();
+    for s in SITES {
+        by_file.entry(s.file).or_default().push(s);
+    }
+    let mut results = Vec::new();
+    for (file, sites) in by_file {
+        let path = version_dir.join(file);
+        if !path.exists() {
+            bail!("未找到目标文件：{}", path.display());
+        }
+        let outcome = patch_file(&path, &sites, mode)?;
+        results.push((file.to_string(), outcome));
+    }
+    Ok(results)
+}
+
+/// 还原两个目标文件（从备份恢复出厂字节）。
+pub fn revert(version_dir: &Path) -> Result<()> {
+    for file in [TARGET_MIPCAUDIO, TARGET_IDMRUNTIME] {
+        let path = version_dir.join(file);
+        if path.exists() {
+            install::restore_backup(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// 读取当前各站点的介质状态，用于 status 展示。
+pub fn current_state(version_dir: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for s in SITES {
+        let path = version_dir.join(s.file);
+        let state = match std::fs::read(&path) {
+            Ok(data) => {
+                match infra::bytes::locate_single_byte(
+                    &data,
+                    s.prefix,
+                    s.suffix,
+                    &[IFTYPE_WIFI, IFTYPE_ETHERNET],
+                ) {
+                    Ok(vi) => match data[vi] {
+                        IFTYPE_WIFI => "无线(WiFi)".to_string(),
+                        IFTYPE_ETHERNET => "有线(LAN)".to_string(),
+                        other => format!("未知(0x{other:02X})"),
+                    },
+                    Err(e) => format!("未定位({e})"),
+                }
+            }
+            Err(_) => "文件不可读".to_string(),
+        };
+        out.push((s.file.to_string(), state));
+    }
+    out
+}
+
+// ── Wi-Fi 本地子网路由（原 audio_wifi_route）─────────────────────
+
+const WIFI_ROUTE_STATE_FILE: &str = ".mipcm_audio_wifi_route";
+const WIFI_ROUTE_METRIC: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WifiSubnet {
@@ -34,13 +189,13 @@ struct RouteState {
 /// - `Some(true)`：本次新建路由；
 /// - `Some(false)`：此前已有相同路由；
 /// - `None`：当前没有可用于媒体会话的 Wi-Fi IPv4 接口，因此未更改网络配置。
-pub fn apply(version_dir: &Path) -> Result<Option<bool>> {
+pub fn apply_wifi_route(version_dir: &Path) -> Result<Option<bool>> {
     let Some(subnet) = discover_wifi_subnet()? else {
         return Ok(None);
     };
-    let state_path = state_path(version_dir);
+    let state_path = wifi_route_state_path(version_dir);
 
-    if let Some(existing) = read_state(&state_path)? {
+    if let Some(existing) = read_wifi_route_state(&state_path)? {
         if existing.interface_index == subnet.interface_index && existing.prefix == subnet.prefix {
             return Ok(Some(false));
         }
@@ -53,7 +208,7 @@ pub fn apply(version_dir: &Path) -> Result<Option<bool>> {
         // 这样 `revert` 不会误删用户的网络配置。
         return Ok(Some(false));
     }
-    write_state(
+    write_wifi_route_state(
         &state_path,
         &RouteState {
             interface_index: subnet.interface_index,
@@ -64,9 +219,9 @@ pub fn apply(version_dir: &Path) -> Result<Option<bool>> {
 }
 
 /// 仅删除本工具此前创建并记录的路由，不会触碰用户已有路由。
-pub fn revert(version_dir: &Path) -> Result<bool> {
-    let path = state_path(version_dir);
-    let Some(state) = read_state(&path)? else {
+pub fn revert_wifi_route(version_dir: &Path) -> Result<bool> {
+    let path = wifi_route_state_path(version_dir);
+    let Some(state) = read_wifi_route_state(&path)? else {
         return Ok(false);
     };
     remove_route(&state)?;
@@ -74,8 +229,9 @@ pub fn revert(version_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
-pub fn state(version_dir: &Path) -> String {
-    match read_state(&state_path(version_dir)) {
+/// 返回 Wi-Fi 路由状态的展示文本。
+pub fn wifi_route_state(version_dir: &Path) -> String {
+    match read_wifi_route_state(&wifi_route_state_path(version_dir)) {
         Ok(Some(route)) => format!(
             "已固定 Wi-Fi 本地路由（{}，接口 {}）",
             route.prefix, route.interface_index
@@ -125,10 +281,10 @@ fn add_route(route: &WifiSubnet) -> Result<bool> {
         "$existing = Get-NetRoute -PolicyStore PersistentStore -DestinationPrefix '{}' -InterfaceIndex {} -NextHop '0.0.0.0' -ErrorAction SilentlyContinue | Where-Object {{ $_.RouteMetric -eq {} }} | Select-Object -First 1; if ($null -ne $existing) {{ 'existing' }} else {{ New-NetRoute -PolicyStore PersistentStore -DestinationPrefix '{}' -InterfaceIndex {} -NextHop '0.0.0.0' -RouteMetric {} -ErrorAction Stop | Out-Null; 'created' }}",
         route.prefix,
         route.interface_index,
-        ROUTE_METRIC,
+        WIFI_ROUTE_METRIC,
         route.prefix,
         route.interface_index,
-        ROUTE_METRIC
+        WIFI_ROUTE_METRIC
     );
     let output = run_powershell(&script)
         .with_context(|| format!("添加 Wi-Fi 本地路由 {} 失败", route.prefix))?;
@@ -142,7 +298,7 @@ fn add_route(route: &WifiSubnet) -> Result<bool> {
 fn remove_route(route: &RouteState) -> Result<()> {
     let script = format!(
         "Get-NetRoute -PolicyStore PersistentStore -DestinationPrefix '{}' -InterfaceIndex {} -NextHop '0.0.0.0' -ErrorAction SilentlyContinue | Where-Object {{ $_.RouteMetric -eq {} }} | Remove-NetRoute -PolicyStore PersistentStore -Confirm:$false -ErrorAction Stop",
-        route.prefix, route.interface_index, ROUTE_METRIC
+        route.prefix, route.interface_index, WIFI_ROUTE_METRIC
     );
     run_powershell(&script)
         .with_context(|| format!("删除 Wi-Fi 本地路由 {} 失败", route.prefix))?;
@@ -169,19 +325,19 @@ fn run_powershell(script: &str) -> Result<String> {
     }
 }
 
-fn state_path(version_dir: &Path) -> PathBuf {
-    version_dir.join(STATE_FILE)
+fn wifi_route_state_path(version_dir: &Path) -> PathBuf {
+    version_dir.join(WIFI_ROUTE_STATE_FILE)
 }
 
-fn write_state(path: &Path, state: &RouteState) -> Result<()> {
+fn write_wifi_route_state(path: &Path, state: &RouteState) -> Result<()> {
     let data = format!(
         "version=1\ninterface_index={}\nprefix={}\n",
         state.interface_index, state.prefix
     );
-    crate::install::write_file_atomic(path, data.as_bytes())
+    install::write_file_atomic(path, data.as_bytes())
 }
 
-fn read_state(path: &Path) -> Result<Option<RouteState>> {
+fn read_wifi_route_state(path: &Path) -> Result<Option<RouteState>> {
     if !path.exists() {
         return Ok(None);
     }

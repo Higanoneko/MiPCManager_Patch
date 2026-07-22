@@ -1,4 +1,4 @@
-use crate::install;
+use crate::{infra, install};
 use anyhow::{Result, bail};
 use std::path::Path;
 
@@ -98,46 +98,14 @@ pub fn proxy_is_current(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(windows)]
 fn set_registry(model: &str) -> Result<()> {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_SUBKEY)?;
-    key.set_value(REG_VALUE, &model.to_string())?;
-    Ok(())
+    infra::registry::set_hkcu_string(REG_SUBKEY, REG_VALUE, model)
 }
 
-#[cfg(windows)]
 fn remove_registry() -> Result<()> {
-    use winreg::RegKey;
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS};
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(key) = hkcu.open_subkey_with_flags(REG_SUBKEY, KEY_ALL_ACCESS) {
-        let _ = key.delete_value(REG_VALUE);
-    }
-    Ok(())
+    infra::registry::delete_hkcu_value(REG_SUBKEY, REG_VALUE)
 }
 
-#[cfg(windows)]
 fn read_registry() -> Option<String> {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(REG_SUBKEY)
-        .ok()
-        .and_then(|k| k.get_value::<String, _>(REG_VALUE).ok())
-}
-
-#[cfg(not(windows))]
-fn set_registry(_model: &str) -> Result<()> {
-    Ok(())
-}
-#[cfg(not(windows))]
-fn remove_registry() -> Result<()> {
-    Ok(())
-}
-#[cfg(not(windows))]
-fn read_registry() -> Option<String> {
-    None
+    infra::registry::get_hkcu_string(REG_SUBKEY, REG_VALUE)
 }

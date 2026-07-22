@@ -1,8 +1,8 @@
-//! .NET 方法体（method body）的解析与“前置守卫”重定位构造。
+//! .NET 方法体（method body）的解析与"前置守卫"重定位构造。
 //!
 //! 用途：在方法体最前面注入一段等价于 `if (arg1 == value) return;` 的 IL 守卫，
 //! 用于从源头抑制特定相机异常 Toast。由于注入会使方法体增长，调用方需把构造出的
-//! 新方法体写入新节并改写 `MethodDef.RVA`（见 `camera_toast`）。
+//! 新方法体写入新节并改写 `MethodDef.RVA`（见 patches::camera）。
 
 use anyhow::{Result, ensure};
 

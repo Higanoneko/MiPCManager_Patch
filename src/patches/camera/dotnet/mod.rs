@@ -1,16 +1,15 @@
 //! 纯 Rust 的 .NET 程序集补丁能力：定位方法 → 在方法体前注入守卫 → 重定位到新节。
 //!
-//! 之所以采用“重定位到新节 + 改写 MethodDef.RVA”，是因为注入会令方法体增长、
+//! 之所以采用"重定位到新节 + 改写 MethodDef.RVA"，是因为注入会令方法体增长、
 //! 无法原地扩展；而该方案不触碰元数据堆（不新增字符串/成员引用），因此能绕开
 //! 现有纯 Rust 元数据写库无法回写大型 WinRT 程序集的限制。
 
 pub mod metadata;
 pub mod method_body;
-pub mod pe;
 
+use crate::infra::pe::PeImage;
 use anyhow::Result;
 use method_body::MethodBody;
-use pe::PeImage;
 
 /// 注入结果。
 #[derive(Debug, PartialEq, Eq)]

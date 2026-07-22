@@ -4,8 +4,9 @@
 //! 每个高层函数返回 `Vec<String>` 日志行，CLI 直接打印、GUI 追加到日志区，二者共用同一套逻辑。
 
 use crate::{
-    audio_wifi_route, camera_toast, device_spoof, dotnet, install, locale_spoof, mipcaudio_lan,
-    pc_manager_installer, smbios_spoof,
+    experimental::smbios_spoof,
+    install::{self, pc_manager_installer},
+    patches::{audio, camera, camera::dotnet, device, locale},
 };
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -54,11 +55,11 @@ pub enum BroadcastMode {
     Wired,
 }
 
-impl From<BroadcastMode> for mipcaudio_lan::BroadcastMode {
+impl From<BroadcastMode> for audio::BroadcastMode {
     fn from(mode: BroadcastMode) -> Self {
         match mode {
-            BroadcastMode::Wireless => mipcaudio_lan::BroadcastMode::Wireless,
-            BroadcastMode::Wired => mipcaudio_lan::BroadcastMode::Wired,
+            BroadcastMode::Wireless => audio::BroadcastMode::Wireless,
+            BroadcastMode::Wired => audio::BroadcastMode::Wired,
         }
     }
 }
@@ -100,7 +101,7 @@ pub fn status_lines() -> Vec<String> {
         match install::latest_version_dir(&root) {
             Ok(version) => {
                 out.push(format!("最新版本目录：{}", version.display()));
-                push_file_status(&version.join(locale_spoof::TARGET_DLL), &mut out);
+                push_file_status(&version.join(locale::TARGET_DLL), &mut out);
                 out.push("  摄像头、音频流转和设备伪装：当前版本不可用".to_string());
             }
             Err(error) => out.push(format!("（无法确定版本目录：{error}）")),
@@ -114,18 +115,18 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
     match install::latest_version_dir(root) {
         Ok(version) => {
             out.push(format!("最新版本目录：{}", version.display()));
-            push_file_status(&version.join(locale_spoof::TARGET_DLL), out);
-            push_file_status(&version.join(camera_toast::TARGET_DLL), out);
+            push_file_status(&version.join(locale::TARGET_DLL), out);
+            push_file_status(&version.join(camera::TARGET_DLL), out);
             out.push("  -- 音频流转广播模式 --".to_string());
-            for (file, state) in mipcaudio_lan::current_state(&version) {
+            for (file, state) in audio::current_state(&version) {
                 out.push(format!("     {file}: {state}"));
             }
             out.push(format!(
                 "     Wi-Fi 本地路由: {}",
-                audio_wifi_route::state(&version)
+                audio::wifi_route_state(&version)
             ));
             out.push("  -- 设备伪装 --".to_string());
-            let (dll_ok, model) = device_spoof::current_state(&version);
+            let (dll_ok, model) = device::current_state(&version);
             out.push(format!(
                 "     msimg32.dll: {} | 注册表机型: {}",
                 if dll_ok { "已就位" } else { "未就位" },
@@ -154,6 +155,38 @@ fn push_file_status(path: &Path, out: &mut Vec<String>) {
     ));
 }
 
+// ===================== 统一补丁流水线 =====================
+
+/// 描述一次补丁操作中关闭进程的策略。
+pub struct PatchOp {
+    pub procs: &'static [&'static str],
+    /// true → 必须关闭（`close_apps_required`）；false → 尽力关闭（`close_apps`）。
+    pub required: bool,
+    pub no_kill: bool,
+}
+
+/// 统一补丁流水线：关闭进程 → 重试执行动作 → 追加成功日志。
+///
+/// 调用方负责在之后追加 [`RESTART_HINT`] 与其他业务日志。
+pub fn run_patch<T, F>(
+    op: &PatchOp,
+    log: &mut Vec<String>,
+    action: F,
+    on_success: impl FnOnce(&T) -> Vec<String>,
+) -> Result<()>
+where
+    F: FnMut() -> Result<T>,
+{
+    if op.required {
+        close_apps_required(op.procs, op.no_kill, log)?;
+    } else {
+        close_apps(op.procs, op.no_kill, log);
+    }
+    let result = retry_patch_after_access_denied(op.procs, log, action)?;
+    log.extend(on_success(&result));
+    Ok(())
+}
+
 // ===================== 地区伪装 =====================
 
 pub fn apply_locale(
@@ -164,23 +197,28 @@ pub fn apply_locale(
 ) -> Result<Vec<String>> {
     let path = resolve_locale_dll(dll)?;
     let mut log = Vec::new();
-    close_apps_required(PROC_LOCALE, no_kill, &mut log)?;
-    let outcome = retry_patch_after_access_denied(PROC_LOCALE, &mut log, || {
-        locale_spoof::apply(&path, region, write_registry)
-    })?;
-    match outcome {
-        locale_spoof::PatchOutcome::Patched => {
-            log.push(format!("✓ 地区伪装已应用：{}", path.display()));
-        }
-        locale_spoof::PatchOutcome::AlreadyPatched => {
-            log.push(format!("• DLL 已是补丁状态（跳过）：{}", path.display()));
-        }
-    }
-    if write_registry {
-        log.push(format!(
-            "  注册表 HKCU\\Control Panel\\International\\Geo\\XCN = {region}"
-        ));
-    }
+    run_patch(
+        &PatchOp { procs: PROC_LOCALE, required: true, no_kill },
+        &mut log,
+        || locale::apply(&path, region, write_registry),
+        |outcome| {
+            let mut lines = Vec::new();
+            match outcome {
+                locale::PatchOutcome::Patched => {
+                    lines.push(format!("✓ 地区伪装已应用：{}", path.display()));
+                }
+                locale::PatchOutcome::AlreadyPatched => {
+                    lines.push(format!("• DLL 已是补丁状态（跳过）：{}", path.display()));
+                }
+            }
+            if write_registry {
+                lines.push(format!(
+                    "  注册表 HKCU\\Control Panel\\International\\Geo\\XCN = {region}"
+                ));
+            }
+            lines
+        },
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -192,11 +230,12 @@ pub fn revert_locale(
 ) -> Result<Vec<String>> {
     let path = resolve_locale_dll(dll)?;
     let mut log = Vec::new();
-    close_apps_required(PROC_LOCALE, no_kill, &mut log)?;
-    retry_patch_after_access_denied(PROC_LOCALE, &mut log, || {
-        locale_spoof::revert(&path, remove_registry)
-    })?;
-    log.push(format!("✓ 已还原地区伪装：{}", path.display()));
+    run_patch(
+        &PatchOp { procs: PROC_LOCALE, required: true, no_kill },
+        &mut log,
+        || locale::revert(&path, remove_registry),
+        |_| vec![format!("✓ 已还原地区伪装：{}", path.display())],
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -204,29 +243,36 @@ pub fn revert_locale(
 // ===================== 摄像头弹窗 =====================
 
 pub fn apply_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let path = resolve_full_feature_dll(dll, camera_toast::TARGET_DLL)?;
+    let path = resolve_full_feature_dll(dll, camera::TARGET_DLL)?;
     let mut log = Vec::new();
-    close_apps(PROC_CAMERA, no_kill, &mut log);
-    let outcome =
-        retry_patch_after_access_denied(PROC_CAMERA, &mut log, || camera_toast::apply(&path))?;
-    match outcome {
-        dotnet::InjectOutcome::Patched => {
-            log.push(format!("✓ 摄像头弹窗补丁已应用：{}", path.display()));
-        }
-        dotnet::InjectOutcome::AlreadyPatched => {
-            log.push(format!("• 已是补丁状态（跳过）：{}", path.display()));
-        }
-    }
+    run_patch(
+        &PatchOp { procs: PROC_CAMERA, required: false, no_kill },
+        &mut log,
+        || camera::apply(&path),
+        |outcome| {
+            vec![match outcome {
+                dotnet::InjectOutcome::Patched => {
+                    format!("✓ 摄像头弹窗补丁已应用：{}", path.display())
+                }
+                dotnet::InjectOutcome::AlreadyPatched => {
+                    format!("• 已是补丁状态（跳过）：{}", path.display())
+                }
+            }]
+        },
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
 
 pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let path = resolve_full_feature_dll(dll, camera_toast::TARGET_DLL)?;
+    let path = resolve_full_feature_dll(dll, camera::TARGET_DLL)?;
     let mut log = Vec::new();
-    close_apps(PROC_CAMERA, no_kill, &mut log);
-    retry_patch_after_access_denied(PROC_CAMERA, &mut log, || camera_toast::revert(&path))?;
-    log.push(format!("✓ 已还原摄像头弹窗补丁：{}", path.display()));
+    run_patch(
+        &PatchOp { procs: PROC_CAMERA, required: false, no_kill },
+        &mut log,
+        || camera::revert(&path),
+        |_| vec![format!("✓ 已还原摄像头弹窗补丁：{}", path.display())],
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -258,24 +304,28 @@ pub fn apply_audio_with_options(
 ) -> Result<Vec<String>> {
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
-    close_apps(PROC_AUDIO, no_kill, &mut log);
-    let patch_mode: mipcaudio_lan::BroadcastMode = mode.into();
-    let results = retry_patch_after_access_denied(PROC_AUDIO, &mut log, || {
-        mipcaudio_lan::apply(&dir, patch_mode)
-    })?;
-    log.push(format!(
-        "✓ 音频流转广播模式已切换为：{}",
-        patch_mode.label()
-    ));
-    for (file, outcome) in results {
-        log.push(format!(
-            "  {file}: 改写 {} 处, 已是目标 {} 处",
-            outcome.patched, outcome.already
-        ));
-    }
-    log.push("  （三处网卡身份已统一 → 手机端应为单设备）".to_string());
+    let patch_mode: audio::BroadcastMode = mode.into();
+    run_patch(
+        &PatchOp { procs: PROC_AUDIO, required: false, no_kill },
+        &mut log,
+        || audio::apply(&dir, patch_mode),
+        |results| {
+            let mut lines = vec![format!(
+                "✓ 音频流转广播模式已切换为：{}",
+                patch_mode.label()
+            )];
+            for (file, outcome) in results {
+                lines.push(format!(
+                    "  {file}: 改写 {} 处, 已是目标 {} 处",
+                    outcome.patched, outcome.already
+                ));
+            }
+            lines.push("  （三处网卡身份已统一 → 手机端应为单设备）".to_string());
+            lines
+        },
+    )?;
     match (mode, no_wifi_local_route) {
-        (BroadcastMode::Wireless, false) => match audio_wifi_route::apply(&dir)? {
+        (BroadcastMode::Wireless, false) => match audio::apply_wifi_route(&dir)? {
             Some(true) => log.push(
                 "  已添加 Wi-Fi 本地子网优先路由：音频会话走 Wi-Fi，本机默认流量仍走有线。"
                     .to_string(),
@@ -286,7 +336,7 @@ pub fn apply_audio_with_options(
             ),
         },
         (BroadcastMode::Wired, _) => {
-            if audio_wifi_route::revert(&dir)? {
+            if audio::revert_wifi_route(&dir)? {
                 log.push(
                     "  已移除 Wi-Fi 本地子网优先路由（有线模式下发现与媒体均走有线，无需此路由）。"
                         .to_string(),
@@ -302,9 +352,13 @@ pub fn apply_audio_with_options(
 pub fn revert_audio(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
-    close_apps(PROC_AUDIO, no_kill, &mut log);
-    retry_patch_after_access_denied(PROC_AUDIO, &mut log, || mipcaudio_lan::revert(&dir))?;
-    if audio_wifi_route::revert(&dir)? {
+    run_patch(
+        &PatchOp { procs: PROC_AUDIO, required: false, no_kill },
+        &mut log,
+        || audio::revert(&dir),
+        |_| vec![],
+    )?;
+    if audio::revert_wifi_route(&dir)? {
         log.push("  已移除 Wi-Fi 本地子网优先路由。".to_string());
     }
     log.push("✓ 已还原音频流转补丁（MiPCAudio.exe / idmruntime.dll）".to_string());
@@ -317,17 +371,18 @@ pub fn revert_audio(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> 
 pub fn apply_device(model: &str, dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
-    close_apps(PROC_DEVICE, no_kill, &mut log);
-    retry_patch_after_access_denied(PROC_DEVICE, &mut log, || device_spoof::apply(&dir, model))?;
-    log.push(format!("✓ 设备伪装已应用：机型 = {model}"));
-    log.push(format!(
-        "  已释放 {} 至 {}",
-        device_spoof::PROXY_DLL_NAME,
-        dir.display()
-    ));
-    log.push(format!(
-        "  注册表 HKCU\\Software\\SmartSharePatch\\SpoofDevice = {model}"
-    ));
+    run_patch(
+        &PatchOp { procs: PROC_DEVICE, required: false, no_kill },
+        &mut log,
+        || device::apply(&dir, model),
+        |_| {
+            vec![
+                format!("✓ 设备伪装已应用：机型 = {model}"),
+                format!("  已释放 {} 至 {}", device::PROXY_DLL_NAME, dir.display()),
+                format!("  注册表 HKCU\\Software\\SmartSharePatch\\SpoofDevice = {model}"),
+            ]
+        },
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -335,9 +390,12 @@ pub fn apply_device(model: &str, dir: Option<PathBuf>, no_kill: bool) -> Result<
 pub fn revert_device(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
-    close_apps(PROC_DEVICE, no_kill, &mut log);
-    retry_patch_after_access_denied(PROC_DEVICE, &mut log, || device_spoof::revert(&dir))?;
-    log.push("✓ 已还原设备伪装（移除 msimg32.dll 与注册表机型）".to_string());
+    run_patch(
+        &PatchOp { procs: PROC_DEVICE, required: false, no_kill },
+        &mut log,
+        || device::revert(&dir),
+        |_| vec!["✓ 已还原设备伪装（移除 msimg32.dll 与注册表机型）".to_string()],
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -351,18 +409,21 @@ pub fn apply_smbios(
 ) -> Result<Vec<String>> {
     let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
     let mut log = Vec::new();
-    close_apps_required(PROC_SMBIOS, no_kill, &mut log)?;
-    let outcome = retry_patch_after_access_denied(PROC_SMBIOS, &mut log, || {
-        smbios_spoof::apply(&path, model)
-    })?;
-    match outcome {
-        smbios_spoof::PatchOutcome::Patched => {
-            log.push(format!("✓ SMBIOS 设备身份补丁已应用：{}", path.display()));
-        }
-        smbios_spoof::PatchOutcome::AlreadyPatched => {
-            log.push(format!("• SMBIOS 已是补丁状态（跳过）：{}", path.display()));
-        }
-    }
+    run_patch(
+        &PatchOp { procs: PROC_SMBIOS, required: true, no_kill },
+        &mut log,
+        || smbios_spoof::apply(&path, model),
+        |outcome| {
+            vec![match outcome {
+                smbios_spoof::PatchOutcome::Patched => {
+                    format!("✓ SMBIOS 设备身份补丁已应用：{}", path.display())
+                }
+                smbios_spoof::PatchOutcome::AlreadyPatched => {
+                    format!("• SMBIOS 已是补丁状态（跳过）：{}", path.display())
+                }
+            }]
+        },
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -370,9 +431,12 @@ pub fn apply_smbios(
 pub fn revert_smbios(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
     let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
     let mut log = Vec::new();
-    close_apps_required(PROC_SMBIOS, no_kill, &mut log)?;
-    retry_patch_after_access_denied(PROC_SMBIOS, &mut log, || smbios_spoof::revert(&path))?;
-    log.push(format!("✓ 已还原 SMBIOS 设备身份补丁：{}", path.display()));
+    run_patch(
+        &PatchOp { procs: PROC_SMBIOS, required: true, no_kill },
+        &mut log,
+        || smbios_spoof::revert(&path),
+        |_| vec![format!("✓ 已还原 SMBIOS 设备身份补丁：{}", path.display())],
+    )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
 }
@@ -390,8 +454,8 @@ pub fn install_from_path(installer: &Path) -> Result<Vec<String>> {
         format!("✓ 已启动{}安装包：{}", kind.label(), installer.display()),
         format!(
             "  已释放 {}、写入 SpoofDevice={}，注入并旁路 WinVersionMatch(需Win11) + MatchProduct*| PID: {pid}",
-            device_spoof::PROXY_DLL_NAME,
-            device_spoof::DEFAULT_MODEL
+            device::PROXY_DLL_NAME,
+            device::DEFAULT_MODEL
         ),
     ])
 }
@@ -447,14 +511,14 @@ pub fn resolve_locale_dll_from_roots(
     for root in [manager_root, continuity_root].into_iter().flatten() {
         match install::latest_version_dir(root) {
             Ok(version) => {
-                let dll = version.join(locale_spoof::TARGET_DLL);
+                let dll = version.join(locale::TARGET_DLL);
                 if dll.exists() {
                     return Ok(dll);
                 }
                 errors.push(format!(
                     "在 {} 中未找到 {}",
                     version.display(),
-                    locale_spoof::TARGET_DLL
+                    locale::TARGET_DLL
                 ));
             }
             Err(error) => errors.push(error.to_string()),
@@ -465,7 +529,7 @@ pub fn resolve_locale_dll_from_roots(
     }
     bail!(
         "未找到可用的 {}：{}",
-        locale_spoof::TARGET_DLL,
+        locale::TARGET_DLL,
         errors.join("；")
     )
 }
@@ -633,11 +697,11 @@ mod tests {
         let continuity_root = fixture_root("locale_continuity");
         let version = continuity_root.join("1.1.2.36");
         fs::create_dir_all(&version).unwrap();
-        fs::write(version.join(locale_spoof::TARGET_DLL), b"fixture").unwrap();
+        fs::write(version.join(locale::TARGET_DLL), b"fixture").unwrap();
 
         let resolved = resolve_locale_dll_from_roots(None, Some(&continuity_root)).unwrap();
 
-        assert_eq!(resolved, version.join(locale_spoof::TARGET_DLL));
+        assert_eq!(resolved, version.join(locale::TARGET_DLL));
         fs::remove_dir_all(continuity_root).unwrap();
     }
 

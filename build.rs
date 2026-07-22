@@ -16,7 +16,7 @@ fn main() {
     // CLI：仅 requireAdministrator。
     embed_resource::compile_for(
         "resources/mipcm_patch.rc",
-        ["mipcm_patch"],
+        ["MiPCM_CLI"],
         embed_resource::NONE,
     )
     .manifest_required()
@@ -27,7 +27,7 @@ fn main() {
     if std::env::var_os("MIPCM_SKIP_GUI_MANIFEST").is_none() {
         embed_resource::compile_for(
             "resources/mipcm_gui.rc",
-            ["mipcm_gui"],
+            ["MiPCM_GUI"],
             embed_resource::NONE,
         )
         .manifest_required()
@@ -36,7 +36,7 @@ fn main() {
         // 仍嵌入图标 + Common Controls v6，但不强制管理员，便于自动化冒烟。
         embed_resource::compile_for(
             "resources/mipcm_gui_test.rc",
-            ["mipcm_gui"],
+            ["MiPCM_GUI"],
             embed_resource::NONE,
         )
         .manifest_required()

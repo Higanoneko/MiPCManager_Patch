@@ -1,6 +1,6 @@
 [package]
 name = "mipcmanager_patch"
-version = "1.5.5"
+version = "1.6.0"
 edition = "2024"
 description = "小米电脑管家 (MiPCManager) 功能增强补丁工具：原生 DLL 字符串补丁 + .NET 方法体重定位补丁"
 
@@ -9,16 +9,19 @@ name = "mipcmanager_patch"
 path = "src/lib.rs"
 
 [[bin]]
-name = "mipcm_patch"
+name = "MiPCM_CLI"
 path = "src/main.rs"
 
 [[bin]]
-name = "mipcm_gui"
-path = "src/bin/gui.rs"
+name = "MiPCM_GUI"
+path = "src/ui/gui/main.rs"
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

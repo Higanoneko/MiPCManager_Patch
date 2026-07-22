@@ -10,7 +10,7 @@
 //! 2. 根据当前 IfType 广播模式，判断 Wi-Fi 本地子网路由是否匹配
 //! 3. 不匹配时自动创建或移除路由，使发现身份与媒体出站统一
 
-use crate::{audio_wifi_route, mipcaudio_lan};
+use crate::patches::audio;
 use anyhow::Result;
 use std::path::Path;
 
@@ -36,7 +36,7 @@ pub fn diagnose(version_dir: &Path) -> Result<Vec<String>> {
     let mut log = Vec::new();
     log.push("== 双网卡音频诊断 ==".to_string());
 
-    let states = mipcaudio_lan::current_state(version_dir);
+    let states = audio::current_state(version_dir);
     if states.is_empty() {
         log.push("  未找到 MiPCAudio.exe / idmruntime.dll，请先确认版本目录。".to_string());
         return Ok(log);
@@ -47,7 +47,7 @@ pub fn diagnose(version_dir: &Path) -> Result<Vec<String>> {
     let mode_is_lan = first_state.contains("有线") || first_state.contains("LAN");
     log.push(format!("  当前广播模式: {first_state}"));
 
-    let route_state = audio_wifi_route::state(version_dir);
+    let route_state = audio::wifi_route_state(version_dir);
     let route_active = !route_state.contains("未配置");
     log.push(format!("  Wi-Fi 优先路由: {}", route_state));
 
@@ -100,7 +100,7 @@ pub fn auto_fix(version_dir: &Path) -> Result<Vec<String>> {
     let mut log = Vec::new();
     log.push("== 双网卡音频实验性修复 ==".to_string());
 
-    let states = mipcaudio_lan::current_state(version_dir);
+    let states = audio::current_state(version_dir);
     if states.is_empty() {
         log.push("  未找到 MiPCAudio.exe / idmruntime.dll。".to_string());
         return Ok(log);
@@ -111,7 +111,7 @@ pub fn auto_fix(version_dir: &Path) -> Result<Vec<String>> {
     log.push(format!("  当前广播模式: {first_state}"));
 
     if mode_is_wifi {
-        match audio_wifi_route::apply(version_dir)? {
+        match audio::apply_wifi_route(version_dir)? {
             Some(true) => log.push(
                 "  ✓ 已添加 Wi-Fi 本地子网优先路由（metric=1）：媒体会话将走 Wi-Fi。".to_string(),
             ),
@@ -121,7 +121,7 @@ pub fn auto_fix(version_dir: &Path) -> Result<Vec<String>> {
             ),
         }
     } else {
-        let removed = audio_wifi_route::revert(version_dir)?;
+        let removed = audio::revert_wifi_route(version_dir)?;
         if removed {
             log.push(
                 "  ✓ 已移除 Wi-Fi 本地子网优先路由：有线模式下发现与媒体均走有线。".to_string(),

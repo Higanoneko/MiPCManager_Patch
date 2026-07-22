@@ -1,10 +1,10 @@
 //! 极简 ECMA-335 元数据读取器。
 //!
-//! 目标单一：在不依赖任何 .NET 运行时的前提下，按“类型简单名 + 方法名后缀”
+//! 目标单一：在不依赖任何 .NET 运行时的前提下，按"类型简单名 + 方法名后缀"
 //! 定位某个方法，返回它的方法体 RVA 以及 `MethodDef` 行中 RVA 字段的文件偏移
 //! （以便重定位后改写指向）。仅解析定位所需的表（Module..MethodDef）。
 
-use crate::dotnet::pe::PeImage;
+use crate::infra::pe::PeImage;
 use anyhow::{Context, Result, bail, ensure};
 
 #[inline]
@@ -202,7 +202,7 @@ impl<'a> Tables<'a> {
 /// 在程序集中定位 `<type_simple_name>` 内、名字以 `<method_name_suffix>` 结尾的方法。
 ///
 /// 返回其方法体 RVA 与 `MethodDef.RVA` 字段的文件偏移。显式接口实现的方法名在
-/// 元数据中带接口全名前缀（如 `Ns.IFoo.Bar`），因此用“后缀匹配”。
+/// 元数据中带接口全名前缀（如 `Ns.IFoo.Bar`），因此用"后缀匹配"。
 pub fn find_method(
     pe: &PeImage,
     type_simple_name: &str,

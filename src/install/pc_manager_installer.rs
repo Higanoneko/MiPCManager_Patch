@@ -115,7 +115,7 @@ pub fn prepare_installer(installer: &Path) -> Result<PathBuf> {
         bail!("安装包必须是 .exe 文件：{}", installer.display());
     }
     let parent = installer.parent().context("无法确定安装包所在目录")?;
-    crate::device_spoof::deploy_proxy(parent)
+    crate::patches::device::deploy_proxy(parent)
 }
 
 /// 返回 Patcher 可执行文件所在目录。
@@ -232,7 +232,7 @@ pub fn launch_installer(installer: &Path) -> Result<u32> {
         .canonicalize()
         .with_context(|| format!("无法解析安装包路径 {}", installer.display()))?;
     let parent = installer.parent().context("无法确定安装包所在目录")?;
-    let proxy = parent.join(crate::device_spoof::PROXY_DLL_NAME);
+    let proxy = parent.join(crate::patches::device::PROXY_DLL_NAME);
     let previous_proxy = match fs::read(&proxy) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -254,7 +254,7 @@ pub fn launch_installer(installer: &Path) -> Result<u32> {
             temporary_existed,
         ));
     }
-    if let Err(error) = crate::device_spoof::ensure_spoof_model(crate::device_spoof::DEFAULT_MODEL)
+    if let Err(error) = crate::patches::device::ensure_spoof_model(crate::patches::device::DEFAULT_MODEL)
     {
         let reg_error = error.context("无法写入 SpoofDevice 伪装机型");
         return Err(rollback_after_error(
@@ -366,7 +366,7 @@ fn launch_suspended_inject_and_patch(
         if kernel32.is_null() {
             bail!("GetModuleHandleW(kernel32) 失败");
         }
-        let load_library = unsafe { GetProcAddress(kernel32, b"LoadLibraryW\0".as_ptr()) };
+        let load_library = unsafe { GetProcAddress(kernel32, c"LoadLibraryW".as_ptr().cast::<u8>()) };
         let Some(load_library) = load_library else {
             bail!("GetProcAddress(LoadLibraryW) 失败");
         };
@@ -918,11 +918,11 @@ mod tests {
         // 非法 exe 会导致启动失败，但启动前应已释放 msimg32.dll；失败后回滚删除。
         assert!(launch_installer(&installer).is_err());
 
-        let proxy = dir.join(crate::device_spoof::PROXY_DLL_NAME);
+        let proxy = dir.join(crate::patches::device::PROXY_DLL_NAME);
         // 启动失败会回滚代理；验证 prepare 路径对小米互联同样生效。
         let _ = prepare_installer(&installer).unwrap();
         assert!(
-            crate::device_spoof::proxy_is_current(&dir),
+            crate::patches::device::proxy_is_current(&dir),
             "小米互联安装包也应释放设备伪装代理"
         );
         assert!(proxy.exists());
@@ -937,8 +937,8 @@ mod tests {
 
         let proxy = prepare_installer(&installer).unwrap();
 
-        assert_eq!(proxy, dir.join(crate::device_spoof::PROXY_DLL_NAME));
-        assert!(crate::device_spoof::proxy_is_current(&dir));
+        assert_eq!(proxy, dir.join(crate::patches::device::PROXY_DLL_NAME));
+        assert!(crate::patches::device::proxy_is_current(&dir));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -998,7 +998,7 @@ mod tests {
     fn restores_existing_proxy_when_installer_fails_to_launch() {
         let dir = fixture_dir("launch_rollback");
         let installer = dir.join("Broken_XiaomiPCManager_fixture.exe");
-        let proxy = dir.join(crate::device_spoof::PROXY_DLL_NAME);
+        let proxy = dir.join(crate::patches::device::PROXY_DLL_NAME);
         fs::write(&installer, b"not a Windows executable").unwrap();
         fs::write(&proxy, b"original proxy").unwrap();
 
@@ -1013,7 +1013,7 @@ mod tests {
     fn restores_existing_proxy_when_proxy_deployment_fails() {
         let dir = fixture_dir("deploy_rollback");
         let installer = dir.join("Broken_XiaomiPCManager_fixture.exe");
-        let proxy = dir.join(crate::device_spoof::PROXY_DLL_NAME);
+        let proxy = dir.join(crate::patches::device::PROXY_DLL_NAME);
         let temporary = patch_temporary_path(&proxy);
         fs::write(&installer, b"not a Windows executable").unwrap();
         fs::write(&proxy, b"original proxy").unwrap();
