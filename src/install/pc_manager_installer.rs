@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::i18n;
+
 /// 安装包所属产品。
 ///
 /// - `XiaomiPcManager`：完整版小米电脑管家，支持全部补丁（含设备伪装）。
@@ -14,19 +16,21 @@ pub enum InstallerKind {
 }
 
 impl InstallerKind {
-    /// 启动安装包前是否需要部署设备伪装代理 `msimg32.dll`。
-    ///
-    /// 两类安装包都会做机型校验（小米互联会显示「暂不支持本设备」），
-    /// 因此一律释放代理 DLL 并写入 SpoofDevice 注册表。
     pub fn deploys_device_proxy(self) -> bool {
         true
     }
 
-    /// 面向用户的产品名称。
     pub fn label(self) -> &'static str {
         match self {
             InstallerKind::XiaomiPcManager => "小米电脑管家 (XiaomiPCManager)",
             InstallerKind::PcContinuity => "小米互联 / 互联互通 (PcContinuity)",
+        }
+    }
+
+    pub fn label_for(self, lang: i18n::Lang) -> &'static str {
+        match self {
+            InstallerKind::XiaomiPcManager => i18n::tr("install.kind.manager", lang),
+            InstallerKind::PcContinuity => i18n::tr("install.kind.continuity", lang),
         }
     }
 }

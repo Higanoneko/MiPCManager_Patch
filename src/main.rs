@@ -1,21 +1,9 @@
 //! 小米电脑管家 / 小米互联 功能增强补丁工具（命令行前端）。
-//!
-//! 子命令：
-//!   status            查看安装信息与补丁状态
-//!   locale apply|revert   地区伪装（micont_rtm.dll + 注册表）
-//!   camera apply|revert   抑制「请确认摄像头状态」弹窗（PcControlCenter.dll）
-//!   audio  apply|revert   音频流转无线/有线广播模式（含双网卡媒体路由修复）
-//!   device apply|revert   设备伪装（释放 msimg32.dll + 注册表机型）
-//!   smbios apply|revert   [实验性] SMBIOS 设备身份伪装（micont_rtm.dll IAT Hook）
-//!   install           安装小米电脑管家 / 小米互联（搜索/下载安装包并按产品处理）
-//!
-//! 直接双击运行（无参数）时进入 ratatui TUI 全屏界面。release exe 内嵌管理员权限 manifest，启动即触发 UAC。
-//! 所有补丁逻辑集中在 `mipcmanager_patch` 库中，CLI 与 GUI 共用。
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use mipcmanager_patch::{
-    elevate, ops,
+    elevate, i18n, ops,
     experimental::{audio_dual_nic, smbios_spoof},
     install::pc_manager_installer,
     patches::device as device_spoof,
@@ -72,6 +60,11 @@ enum Command {
         /// 从 HTTP(S) 地址下载安装包
         #[arg(long, value_name = "URL", conflicts_with = "installer")]
         url: Option<String>,
+    },
+    /// 卸载 MiDrop Ext MSIX 包 或 小米电脑管家 / 小米互联
+    Uninstall {
+        #[command(subcommand)]
+        action: UninstallAction,
     },
 }
 
@@ -173,6 +166,14 @@ enum SmbiosAction {
     },
 }
 
+#[derive(Subcommand, Clone)]
+enum UninstallAction {
+    /// 卸载 MiDrop Ext MSIX 包（完成后重启资源管理器）
+    Msix,
+    /// 完整卸载小米电脑管家 / 小米互联（主程序 + 子产品 + 服务 + 文件清理，不可逆）
+    Product,
+}
+
 #[derive(ValueEnum, Clone, Copy)]
 enum ModeArg {
     Wifi,
@@ -189,24 +190,24 @@ impl From<ModeArg> for ops::BroadcastMode {
 }
 
 fn main() {
-    // Release exe 通过 manifest 在启动前请求管理员权限；这里保留运行时兜底。
     elevate::ensure_elevated();
+    let lang = i18n::detect_lang();
     if let Some(message) = ops::close_all_on_startup() {
         println!("{message}");
     }
 
     let cli = Cli::parse();
     let result = match cli.command {
-        Some(cmd) => run(cmd),
+        Some(cmd) => run(cmd, lang),
         None => mipcmanager_patch::ui::tui::run(),
     };
     if let Err(e) = result {
-        eprintln!("错误：{e:#}");
+        eprintln!("{}", i18n::tr("cli.error", lang).replace("{error}", &format!("{e:#}")));
         std::process::exit(1);
     }
 }
 
-fn run(cmd: Command) -> Result<()> {
+fn run(cmd: Command, lang: i18n::Lang) -> Result<()> {
     match cmd {
         Command::Status => {
             print_log(ops::status_lines());
@@ -293,7 +294,25 @@ fn run(cmd: Command) -> Result<()> {
                 Ok(())
             }
         },
-        Command::Install { installer, url } => install_pc_manager(installer, url),
+        Command::Install { installer, url } => install_pc_manager(installer, url, lang),
+        Command::Uninstall { action } => match action {
+            UninstallAction::Msix => {
+                print_log(ops::uninstall_msix(false)?);
+                Ok(())
+            }
+            UninstallAction::Product => {
+                let desc = ops::uninstall_product_description()?;
+                println!("{desc}");
+                println!();
+                let input = prompt(i18n::tr("cli.confirm.uninstall", lang))?;
+                if input.to_lowercase() != "y" {
+                    println!("{}", i18n::tr("cli.cancelled.uninstall", lang));
+                    return Ok(());
+                }
+                print_log(ops::uninstall_product()?);
+                Ok(())
+            }
+        },
     }
 }
 
@@ -305,10 +324,10 @@ fn print_log(lines: Vec<String>) {
 
 // ===================== 安装（交互式选择安装包） =====================
 
-fn install_pc_manager(explicit: Option<PathBuf>, url: Option<String>) -> Result<()> {
+fn install_pc_manager(explicit: Option<PathBuf>, url: Option<String>, lang: i18n::Lang) -> Result<()> {
     let patcher_dir = pc_manager_installer::patcher_dir()?;
-    let Some(installer) = choose_manager_installer(explicit, url.as_deref(), &patcher_dir)? else {
-        println!("已取消安装。");
+    let Some(installer) = choose_manager_installer(explicit, url.as_deref(), &patcher_dir, lang)? else {
+        println!("{}", i18n::tr("cli.cancelled.install", lang));
         return Ok(());
     };
     print_log(ops::install_from_path(&installer)?);
@@ -319,12 +338,13 @@ fn choose_manager_installer(
     explicit: Option<PathBuf>,
     url: Option<&str>,
     patcher_dir: &Path,
+    lang: i18n::Lang,
 ) -> Result<Option<PathBuf>> {
     if let Some(path) = explicit {
         return Ok(Some(path));
     }
     if let Some(url) = url {
-        println!("正在下载安装包到 {}", patcher_dir.display());
+        println!("{}", i18n::tr("cli.downloading", lang).replace("{path}", &patcher_dir.display().to_string()));
         return pc_manager_installer::download_installer(url, patcher_dir).map(Some);
     }
 
@@ -332,11 +352,13 @@ fn choose_manager_installer(
     match candidates.as_slice() {
         [only] => {
             let kind = pc_manager_installer::classify_installer(only);
-            println!("已找到{}安装包：{}", kind.label(), only.display());
+            println!("{}", i18n::tr("cli.found.installer", lang)
+                .replace("{kind}", kind.label_for(lang))
+                .replace("{path}", &only.display().to_string()));
             Ok(Some(only.clone()))
         }
-        [] => prompt_installer_source(patcher_dir),
-        _ => prompt_installer_candidate(&candidates),
+        [] => prompt_installer_source(patcher_dir, lang),
+        _ => prompt_installer_candidate(&candidates, lang),
     }
 }
 
@@ -360,24 +382,24 @@ struct MenuEntry {
 const INSTALLER_SOURCE_MENU: &[MenuEntry] = &[
     MenuEntry {
         key: "1",
-        description: "输入下载网址",
+        description: "cli.menu.download_url",
         action: InstallerSourceAction::DownloadUrl,
     },
     MenuEntry {
         key: "2",
-        description: "指定本地 .exe 安装包",
+        description: "cli.menu.local_file",
         action: InstallerSourceAction::SpecifyPath,
     },
 ];
 
-fn prompt_installer_candidate(candidates: &[PathBuf]) -> Result<Option<PathBuf>> {
-    println!("找到多个安装包：");
+fn prompt_installer_candidate(candidates: &[PathBuf], lang: i18n::Lang) -> Result<Option<PathBuf>> {
+    println!("{}", i18n::tr("cli.multiple.installers", lang));
     for (index, path) in candidates.iter().enumerate() {
         let kind = pc_manager_installer::classify_installer(path);
-        println!("  {}) [{}] {}", index + 1, kind.label(), path.display());
+        println!("  {}) [{}] {}", index + 1, kind.label_for(lang), path.display());
     }
-    println!("  0) 取消");
-    let choice = prompt("请选择安装包：")?;
+    println!("  0) {}", i18n::tr("cli.cancel.option", lang));
+    let choice = prompt(i18n::tr("cli.choose.installer", lang))?;
     if choice == "0" || choice.is_empty() {
         return Ok(None);
     }
@@ -385,34 +407,32 @@ fn prompt_installer_candidate(candidates: &[PathBuf]) -> Result<Option<PathBuf>>
         .parse::<usize>()
         .ok()
         .filter(|index| (1..=candidates.len()).contains(index))
-        .context("无效的安装包选择")?;
+        .context(i18n::tr("cli.invalid.choice", lang))?;
     Ok(Some(candidates[index - 1].clone()))
 }
 
-fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
-    println!(
-        "未在 Patcher 同目录找到安装包（小米电脑管家 `*_XiaomiPCManager_*.exe` 或小米互联 `小米互联*.exe`）。"
-    );
+fn prompt_installer_source(patcher_dir: &Path, lang: i18n::Lang) -> Result<Option<PathBuf>> {
+    println!("{}", i18n::tr("cli.no.installer.found", lang));
     for entry in INSTALLER_SOURCE_MENU {
-        println!("  {}) {}", entry.key, entry.description);
+        println!("  {}) {}", entry.key, i18n::tr(entry.description, lang));
     }
-    println!("  0) 取消");
-    let choice = prompt("请选择：")?;
+    println!("  0) {}", i18n::tr("cli.cancel.option", lang));
+    let choice = prompt(i18n::tr("cli.choose.option", lang))?;
     let action = INSTALLER_SOURCE_MENU
         .iter()
         .find(|e| e.key == choice)
         .map(|e| &e.action);
     match action {
         Some(InstallerSourceAction::DownloadUrl) => {
-            let url = prompt("请输入 HTTP(S) 下载地址：")?;
+            let url = prompt(i18n::tr("cli.prompt.url", lang))?;
             if url.is_empty() {
                 return Ok(None);
             }
-            println!("正在下载安装包到 {}", patcher_dir.display());
+            println!("{}", i18n::tr("cli.downloading", lang).replace("{path}", &patcher_dir.display().to_string()));
             pc_manager_installer::download_installer(&url, patcher_dir).map(Some)
         }
         Some(InstallerSourceAction::SpecifyPath) => {
-            let input = prompt("请输入 .exe 安装包路径：")?;
+            let input = prompt(i18n::tr("cli.prompt.path", lang))?;
             let path = input.trim().trim_matches(['"', '\'']);
             if path.is_empty() {
                 Ok(None)
@@ -421,7 +441,7 @@ fn prompt_installer_source(patcher_dir: &Path) -> Result<Option<PathBuf>> {
             }
         }
         None if choice == "0" || choice.is_empty() => Ok(None),
-        None => bail!("无效选择"),
+        None => bail!(i18n::tr("cli.invalid.selection", lang)),
     }
 }
 

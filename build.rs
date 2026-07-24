@@ -6,6 +6,9 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/mipcm_gui_test.rc");
     println!("cargo:rerun-if-changed=resources/mipcm_gui_test.exe.manifest");
     println!("cargo:rerun-if-changed=assets/MiPCManager.ico");
+    println!("cargo:rerun-if-changed=src/ui/app.slint");
+
+    slint_build::compile("src/ui/app.slint").unwrap();
 
     // Cargo also builds the binaries as test harnesses during `cargo test`; embedding a
     // requireAdministrator manifest there would make ordinary test runs require UAC.

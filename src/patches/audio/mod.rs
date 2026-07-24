@@ -7,12 +7,12 @@
 //! 的持久路由，强制媒体会话走 Wi-Fi。
 
 use crate::{infra, install};
+use crate::infra::powershell::run_powershell;
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::BTreeMap;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // ── IfType 补丁（原 mipcaudio_lan）──────────────────────────────
 
@@ -303,26 +303,6 @@ fn remove_route(route: &RouteState) -> Result<()> {
     run_powershell(&script)
         .with_context(|| format!("删除 Wi-Fi 本地路由 {} 失败", route.prefix))?;
     Ok(())
-}
-
-fn run_powershell(script: &str) -> Result<String> {
-    #[cfg(not(windows))]
-    {
-        let _ = script;
-        bail!("Wi-Fi 本地路由功能仅支持 Windows");
-    }
-    #[cfg(windows)]
-    {
-        let output = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-            .context("无法启动 Windows PowerShell")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            bail!("PowerShell 退出码 {:?}：{}", output.status.code(), stderr);
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
 }
 
 fn wifi_route_state_path(version_dir: &Path) -> PathBuf {

@@ -1,10 +1,10 @@
-![Header](docs/MiPCMPatcher.png)
+![Header](assets/MiPCMPatcher.png)
 
 # MiPCM Patch
 
 为「小米电脑管家 / 小米互联」提供功能增强与还原能力的补丁工具。支持图形界面与命令行两种使用方式。
 
-![GUI 预览](docs/MiPCM_GUI.png)
+![GUI 预览](assets/MiPCM_GUI.png)
 
 ## 能做什么
 

@@ -7,4 +7,5 @@
 
 pub mod bytes;
 pub mod pe;
+pub mod powershell;
 pub mod registry;

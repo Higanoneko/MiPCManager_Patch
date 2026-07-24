@@ -7,6 +7,7 @@ use crate::{
     experimental::smbios_spoof,
     install::{self, pc_manager_installer},
     patches::{audio, camera, camera::dotnet, device, locale},
+    uninstall,
 };
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -91,7 +92,7 @@ pub fn status_lines() -> Vec<String> {
     }
     if let Some(root) = manager_root {
         out.push(String::new());
-        out.push("-- XiaomiPCManager（全功能）--".to_string());
+        out.push("-- XiaomiPCManager (全功能)--".to_string());
         push_full_installation_status(&root, &mut out);
     }
     if let Some(root) = continuity_root {
@@ -438,6 +439,73 @@ pub fn revert_smbios(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
         |_| vec![format!("✓ 已还原 SMBIOS 设备身份补丁：{}", path.display())],
     )?;
     log.push(RESTART_HINT.to_string());
+    Ok(log)
+}
+
+// ===================== 卸载 =====================
+
+/// 卸载 MiDrop Ext MSIX 包，完成后重启资源管理器。
+pub fn uninstall_msix(no_kill: bool) -> Result<Vec<String>> {
+    let package = match uninstall::detect_msix()? {
+        Some(p) => p,
+        None => return Ok(vec!["未检测到 MiDrop Ext MSIX 包".to_string()]),
+    };
+
+    let mut log = Vec::new();
+    let pkg = package.clone();
+    run_patch(
+        &PatchOp {
+            procs: &[],
+            required: false,
+            no_kill,
+        },
+        &mut log,
+        || {
+            uninstall::remove_msix(&package)?;
+            uninstall::restart_explorer()?;
+            Ok(())
+        },
+        |_| {
+            vec![
+                format!("✓ 已卸载 MiDrop Ext MSIX 包：{pkg}"),
+                "✓ 已重启资源管理器".to_string(),
+            ]
+        },
+    )?;
+    Ok(log)
+}
+
+/// 获取产品卸载描述（用于前端确认提示）。
+pub fn uninstall_product_description() -> Result<String> {
+    uninstall::uninstall_description()
+}
+
+/// 卸载小米电脑管家 / 小米互联（完整流程：主程序 + 子产品 + 服务 + 文件清理）。
+///
+/// 此操作不可逆，调用方需在执行前获取用户确认。
+pub fn uninstall_product() -> Result<Vec<String>> {
+    let mut log = Vec::new();
+
+    let manager_root = install::find_install_root();
+    let continuity_root = install::find_pc_continuity_root();
+
+    match (manager_root, continuity_root) {
+        (Some(_), Some(_)) => {
+            bail!(
+                "同时检测到小米电脑管家和小米互联，不支持同时安装。请逐一卸载。"
+            );
+        }
+        (Some(root), None) => {
+            uninstall::uninstall_xiaomi_pc_manager(&root, &mut log)?;
+        }
+        (None, Some(root)) => {
+            uninstall::uninstall_pc_continuity(&root, &mut log)?;
+        }
+        (None, None) => {
+            bail!("未检测到已安装的小米电脑管家或小米互联");
+        }
+    }
+
     Ok(log)
 }
 

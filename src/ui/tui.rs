@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 use crate::{
-    ops,
+    i18n, ops,
     patches::device,
 };
 
@@ -28,24 +28,21 @@ use crate::{
 
 /// 启动 ratatui TUI 界面。在 `main.rs` 中无命令行参数时调用。
 pub fn run() -> Result<()> {
-    // 初始化终端
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
 
-    // 创建 tokio runtime 用于异步补丁操作
+    let lang = i18n::detect_lang();
     let rt = tokio::runtime::Runtime::new()?;
     let (log_tx, log_rx) = mpsc::channel::<LogMessage>();
 
-    let mut app = App::new(rt, log_tx);
+    let mut app = App::new(rt, log_tx, lang);
 
-    // ratatui terminal
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let result = app.run_loop(&mut terminal, log_rx);
 
-    // 还原终端
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -67,6 +64,7 @@ enum LogMessage {
 enum Panel {
     Patches,
     Install,
+    Uninstall,
     Log,
 }
 
@@ -84,19 +82,19 @@ enum PatchRow {
 impl PatchRow {
     const ALL: &[PatchRow] = &[
         PatchRow::Locale,
+        PatchRow::Device,
         PatchRow::Camera,
         PatchRow::Audio,
-        PatchRow::Device,
         PatchRow::Smbios,
     ];
 
-    fn label(&self) -> &'static str {
+    fn label(&self, lang: i18n::Lang) -> &'static str {
         match self {
-            PatchRow::Locale => "地区伪装 (micont_rtm.dll)",
-            PatchRow::Camera => "摄像头弹窗抑制 (PcControlCenter.dll)",
-            PatchRow::Audio => "音频流转广播模式",
-            PatchRow::Device => "设备伪装 (msimg32.dll)",
-            PatchRow::Smbios => "[实验性] SMBIOS 设备身份",
+            PatchRow::Locale => i18n::tr("patch.locale.detail", lang),
+            PatchRow::Camera => i18n::tr("patch.camera.detail", lang),
+            PatchRow::Audio => i18n::tr("patch.audio.detail", lang),
+            PatchRow::Device => i18n::tr("patch.device.detail", lang),
+            PatchRow::Smbios => i18n::tr("patch.smbios.detail", lang),
         }
     }
 }
@@ -109,7 +107,7 @@ enum Button {
     Lan,
 }
 
-// ── Text input mode ───────────────────────────────────────────────
+// ── Text input / Confirmation mode ────────────────────────────────
 
 /// 当用户在设备/SMBIOS 补丁上按 `c` 时进入自定义机型输入模式。
 struct InputMode {
@@ -119,13 +117,45 @@ struct InputMode {
     buffer: String,
 }
 
+/// 当用户执行不可逆操作（如产品卸载）时弹出确认提示。
+struct ConfirmMode {
+    /// 确认提示文本。
+    message: String,
+    /// 确认后执行的操作标签。
+    action_label: String,
+}
+
+/// 卸载面板可选操作。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UninstallRow {
+    Msix,
+    Product,
+}
+
+impl UninstallRow {
+    const ALL: &[UninstallRow] = &[UninstallRow::Msix, UninstallRow::Product];
+
+    fn label(&self, lang: i18n::Lang) -> &'static str {
+        match self {
+            UninstallRow::Msix => i18n::tr("tui.op.uninstall.msix", lang),
+            UninstallRow::Product => i18n::tr("tui.op.uninstall.product", lang),
+        }
+    }
+
+    fn hint(&self, lang: i18n::Lang) -> &'static str {
+        match self {
+            UninstallRow::Msix => i18n::tr("hint.uninstall.msix", lang),
+            UninstallRow::Product => i18n::tr("hint.uninstall.product", lang),
+        }
+    }
+}
+
 // ── App state ──────────────────────────────────────────────────────
 
 struct App {
-    // Terminal size tracking
     _prev_size: Option<(u16, u16)>,
+    lang: i18n::Lang,
 
-    // Async runtime & channel
     rt: tokio::runtime::Runtime,
     log_tx: Sender<LogMessage>,
 
@@ -143,6 +173,12 @@ struct App {
     // Text input mode for custom model
     input_mode: Option<InputMode>,
 
+    // Uninstall panel selection
+    selected_uninstall: usize,
+
+    // Confirmation mode for destructive actions
+    confirm_mode: Option<ConfirmMode>,
+
     // Status cache
     status_lines: Vec<String>,
     full_features: bool,
@@ -157,9 +193,10 @@ struct App {
 }
 
 impl App {
-    fn new(rt: tokio::runtime::Runtime, log_tx: Sender<LogMessage>) -> Self {
+    fn new(rt: tokio::runtime::Runtime, log_tx: Sender<LogMessage>, lang: i18n::Lang) -> Self {
         let mut app = Self {
             _prev_size: None,
+            lang,
             rt,
             log_tx,
             focused_panel: Panel::Patches,
@@ -170,6 +207,8 @@ impl App {
             custom_device_model: None,
             custom_smbios_model: None,
             input_mode: None,
+            selected_uninstall: 0,
+            confirm_mode: None,
             status_lines: Vec::new(),
             full_features: false,
             log: Vec::new(),
@@ -224,7 +263,7 @@ impl App {
                     self.refresh_status();
                 }
                 Ok(LogMessage::Error(e)) => {
-                    self.log.push(format!("❌ 错误：{e}"));
+                    self.log.push(i18n::tr("tui.log.error", self.lang).replace("{error}", &e));
                     self.op_running = false;
                     self.op_label.clear();
                     self.log_scroll = self.log.len().saturating_sub(1);
@@ -241,42 +280,12 @@ impl App {
     fn handle_key(&mut self, code: KeyCode) -> bool {
         // Text input mode intercepts most keys
         if self.input_mode.is_some() {
-            match code {
-                KeyCode::Esc => {
-                    self.input_mode = None;
-                }
-                KeyCode::Enter => {
-                    let input = self.input_mode.take().unwrap();
-                    let model = input.buffer.trim().to_string();
-                    if !model.is_empty() {
-                        match input.target {
-                            PatchRow::Device => {
-                                self.custom_device_model = Some(model.clone());
-                                self.log.push(format!("📱 自定义设备机型已设置：{model}"));
-                                self.log_scroll = self.log.len().saturating_sub(1);
-                            }
-                            PatchRow::Smbios => {
-                                self.custom_smbios_model = Some(model.clone());
-                                self.log.push(format!("📱 自定义 SMBIOS 机型已设置：{model}"));
-                                self.log_scroll = self.log.len().saturating_sub(1);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                KeyCode::Backspace => {
-                    if let Some(ref mut input) = self.input_mode {
-                        input.buffer.pop();
-                    }
-                }
-                KeyCode::Char(c) => {
-                    if let Some(ref mut input) = self.input_mode {
-                        input.buffer.push(c);
-                    }
-                }
-                _ => {}
-            }
-            return true;
+            return self.handle_input_key(code);
+        }
+
+        // Confirmation mode intercepts most keys
+        if self.confirm_mode.is_some() {
+            return self.handle_confirm_key(code);
         }
 
         // Global keys (always active)
@@ -286,7 +295,8 @@ impl App {
             KeyCode::Tab => {
                 self.focused_panel = match self.focused_panel {
                     Panel::Patches => Panel::Install,
-                    Panel::Install => Panel::Log,
+                    Panel::Install => Panel::Uninstall,
+                    Panel::Uninstall => Panel::Log,
                     Panel::Log => Panel::Patches,
                 };
                 self.selected_button = 0;
@@ -307,7 +317,69 @@ impl App {
         match self.focused_panel {
             Panel::Patches => self.handle_patches_key(code),
             Panel::Install => self.handle_install_key(code),
+            Panel::Uninstall => self.handle_uninstall_key(code),
             Panel::Log => self.handle_log_key(code),
+        }
+        true
+    }
+
+    fn handle_input_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.input_mode = None;
+            }
+            KeyCode::Enter => {
+                let input = self.input_mode.take().unwrap();
+                let model = input.buffer.trim().to_string();
+                if !model.is_empty() {
+                    match input.target {
+                        PatchRow::Device => {
+                            self.custom_device_model = Some(model.clone());
+                            self.log
+                                .push(i18n::tr("tui.log.model.set", self.lang).replace("{model}", &model));
+                            self.log_scroll = self.log.len().saturating_sub(1);
+                        }
+                        PatchRow::Smbios => {
+                            self.custom_smbios_model = Some(model.clone());
+                            self.log
+                                .push(i18n::tr("tui.log.smbios.set", self.lang).replace("{model}", &model));
+                            self.log_scroll = self.log.len().saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut input) = self.input_mode {
+                    input.buffer.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut input) = self.input_mode {
+                    input.buffer.push(c);
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn handle_confirm_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let confirm = self.confirm_mode.take().unwrap();
+                if confirm.action_label == "uninstall_product" {
+                    self.spawn_uninstall_product();
+                }
+            }
+            KeyCode::Char('n')
+            | KeyCode::Char('N')
+            | KeyCode::Esc => {
+                self.confirm_mode = None;
+                self.log.push(i18n::tr("tui.log.cancelled", self.lang).to_string());
+                self.log_scroll = self.log.len().saturating_sub(1);
+            }
+            _ => {}
         }
         true
     }
@@ -359,6 +431,44 @@ impl App {
     fn handle_install_key(&mut self, code: KeyCode) {
         if code == KeyCode::Enter {
             self.spawn_install();
+        }
+    }
+
+    fn handle_uninstall_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Up => {
+                if self.selected_uninstall > 0 {
+                    self.selected_uninstall -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_uninstall < UninstallRow::ALL.len() - 1 {
+                    self.selected_uninstall += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let row = UninstallRow::ALL[self.selected_uninstall];
+                match row {
+                    UninstallRow::Msix => self.spawn_uninstall_msix(),
+                    UninstallRow::Product => {
+                        // Fetch description and show confirmation
+                        match ops::uninstall_product_description() {
+                            Ok(desc) => {
+                                self.confirm_mode = Some(ConfirmMode {
+                                    message: desc,
+                                    action_label: "uninstall_product".to_string(),
+                                });
+                            }
+                            Err(e) => {
+                                self.log
+                                    .push(i18n::tr("tui.log.error", self.lang).replace("{error}", &format!("{e:#}")));
+                                self.log_scroll = self.log.len().saturating_sub(1);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -440,23 +550,19 @@ impl App {
         let presets_len = device::PRESETS.len();
         match self.current_patch() {
             PatchRow::Device => {
-                self.custom_device_model = None; // clear custom when cycling presets
+                self.custom_device_model = None;
                 self.device_model_idx = (self.device_model_idx + 1) % presets_len;
-                self.log.push(format!(
-                    "📱 设备伪装机型切换为：{} [{}]",
-                    device::PRESETS[self.device_model_idx].code,
-                    device::PRESETS[self.device_model_idx].name
-                ));
+                self.log.push(i18n::tr("tui.log.model.switch", self.lang)
+                    .replace("{code}", device::PRESETS[self.device_model_idx].code)
+                    .replace("{name}", device::PRESETS[self.device_model_idx].name));
                 self.log_scroll = self.log.len().saturating_sub(1);
             }
             PatchRow::Smbios => {
-                self.custom_smbios_model = None; // clear custom when cycling presets
+                self.custom_smbios_model = None;
                 self.smbios_model_idx = (self.smbios_model_idx + 1) % presets_len;
-                self.log.push(format!(
-                    "📱 SMBIOS 机型切换为：{} [{}]",
-                    device::PRESETS[self.smbios_model_idx].code,
-                    device::PRESETS[self.smbios_model_idx].name
-                ));
+                self.log.push(i18n::tr("tui.log.smbios.switch", self.lang)
+                    .replace("{code}", device::PRESETS[self.smbios_model_idx].code)
+                    .replace("{name}", device::PRESETS[self.smbios_model_idx].name));
                 self.log_scroll = self.log.len().saturating_sub(1);
             }
             _ => {}
@@ -495,17 +601,21 @@ impl App {
         self.op_label = label.to_string();
         let tx = self.log_tx.clone();
         let label = label.to_string();
+        let lang = self.lang;
         self.rt.spawn(async move {
-            let _ = tx.send(LogMessage::Line(format!("▶ 开始：{label}")));
+            let _ = tx.send(LogMessage::Line(i18n::tr("tui.log.start", lang).replace("{label}", &label)));
             match f() {
                 Ok(lines) => {
                     for line in lines {
                         let _ = tx.send(LogMessage::Line(line));
                     }
-                    let _ = tx.send(LogMessage::Line(format!("✓ 完成：{label}")));
+                    let _ = tx.send(LogMessage::Line(i18n::tr("tui.log.done", lang).replace("{label}", &label)));
                 }
                 Err(e) => {
-                    let _ = tx.send(LogMessage::Error(format!("{label} 失败：{e:#}")));
+                    let msg = i18n::tr("tui.log.failed", lang)
+                        .replace("{label}", &label)
+                        .replace("{error}", &format!("{e:#}"));
+                    let _ = tx.send(LogMessage::Error(msg));
                 }
             }
             let _ = tx.send(LogMessage::Done);
@@ -513,65 +623,87 @@ impl App {
     }
 
     fn spawn_locale_apply(&mut self) {
-        self.spawn_op("地区伪装 · 应用", || ops::apply_locale(None, "CN", true, false));
+        let label = i18n::tr("tui.op.locale.apply", self.lang);
+        self.spawn_op(label, || ops::apply_locale(None, "CN", true, false));
     }
 
     fn spawn_locale_revert(&mut self) {
-        self.spawn_op("地区伪装 · 还原", || ops::revert_locale(None, true, false));
+        let label = i18n::tr("tui.op.locale.revert", self.lang);
+        self.spawn_op(label, || ops::revert_locale(None, true, false));
     }
 
     fn spawn_camera_apply(&mut self) {
-        self.spawn_op("摄像头弹窗抑制 · 应用", || ops::apply_camera(None, false));
+        let label = i18n::tr("tui.op.camera.apply", self.lang);
+        self.spawn_op(label, || ops::apply_camera(None, false));
     }
 
     fn spawn_camera_revert(&mut self) {
-        self.spawn_op("摄像头弹窗抑制 · 还原", || ops::revert_camera(None, false));
+        let label = i18n::tr("tui.op.camera.revert", self.lang);
+        self.spawn_op(label, || ops::revert_camera(None, false));
     }
 
     fn spawn_audio_wifi(&mut self) {
-        self.spawn_op("音频流转 · WiFi", || {
+        let label = i18n::tr("tui.op.audio.wifi", self.lang);
+        self.spawn_op(label, || {
             ops::apply_audio(ops::BroadcastMode::Wireless, None, false)
         });
     }
 
     fn spawn_audio_lan(&mut self) {
-        self.spawn_op("音频流转 · LAN", || {
+        let label = i18n::tr("tui.op.audio.lan", self.lang);
+        self.spawn_op(label, || {
             ops::apply_audio(ops::BroadcastMode::Wired, None, false)
         });
     }
 
     fn spawn_audio_revert(&mut self) {
-        self.spawn_op("音频流转 · 还原", || ops::revert_audio(None, false));
+        let label = i18n::tr("tui.op.audio.revert", self.lang);
+        self.spawn_op(label, || ops::revert_audio(None, false));
     }
 
     fn spawn_device_apply(&mut self) {
         let model = self.current_device_model().to_string();
-        self.spawn_op(&format!("设备伪装 · 应用({model})"), move || {
+        let label = i18n::tr("tui.op.device.apply", self.lang).replace("{model}", &model);
+        self.spawn_op(&label, move || {
             ops::apply_device(&model, None, false)
         });
     }
 
     fn spawn_device_revert(&mut self) {
-        self.spawn_op("设备伪装 · 还原", || ops::revert_device(None, false));
+        let label = i18n::tr("tui.op.device.revert", self.lang);
+        self.spawn_op(label, || ops::revert_device(None, false));
     }
 
     fn spawn_smbios_apply(&mut self) {
         let model = self.current_smbios_model().to_string();
-        self.spawn_op(&format!("SMBIOS · 应用({model})"), move || {
+        let label = i18n::tr("tui.op.smbios.apply", self.lang).replace("{model}", &model);
+        self.spawn_op(&label, move || {
             ops::apply_smbios(Some(&model), None, false)
         });
     }
 
     fn spawn_smbios_revert(&mut self) {
-        self.spawn_op("SMBIOS · 还原", || ops::revert_smbios(None, false));
+        let label = i18n::tr("tui.op.smbios.revert", self.lang);
+        self.spawn_op(label, || ops::revert_smbios(None, false));
+    }
+
+    fn spawn_uninstall_msix(&mut self) {
+        let label = i18n::tr("tui.op.uninstall.msix", self.lang);
+        self.spawn_op(label, || ops::uninstall_msix(false));
+    }
+
+    fn spawn_uninstall_product(&mut self) {
+        let label = i18n::tr("tui.op.uninstall.product", self.lang);
+        self.spawn_op(label, || {
+            ops::uninstall_product()
+        });
     }
 
     fn spawn_install(&mut self) {
-        // 安装流程需要交互式选择安装包，不适合在 TUI 后台执行。
-        // 在日志面板提示用户通过命令行 `MiPCM_CLI install` 执行。
-        self.log.push("💡 安装请使用命令行：MiPCM_CLI install".to_string());
-        self.log.push("   或：MiPCM_CLI install --installer <路径>".to_string());
-        self.log.push("   或：MiPCM_CLI install --url <下载地址>".to_string());
+        let lang = self.lang;
+        self.log.push(i18n::tr("hint.install.tui", lang).to_string());
+        self.log.push(i18n::tr("tui.install.hint.cmd1", lang).to_string());
+        self.log.push(i18n::tr("tui.install.hint.cmd2", lang).to_string());
         self.log_scroll = self.log.len().saturating_sub(1);
     }
 
@@ -587,6 +719,7 @@ impl App {
                 Constraint::Length(1),  // title
                 Constraint::Min(8),     // status + patches
                 Constraint::Length(3),  // install
+                Constraint::Length(4),  // uninstall
                 Constraint::Min(4),     // log
                 Constraint::Length(1),  // shortcuts
             ])
@@ -595,10 +728,14 @@ impl App {
         self.render_title(f, v[0]);
         self.render_main(f, v[1]);
         self.render_install(f, v[2]);
-        self.render_log(f, v[3]);
-        self.render_shortcuts(f, v[4]);
+        self.render_uninstall(f, v[3]);
+        self.render_log(f, v[4]);
+        self.render_shortcuts(f, v[5]);
 
-        // Text input overlay
+        // Overlays
+        if let Some(ref confirm) = self.confirm_mode {
+            self.render_confirm_overlay(f, confirm);
+        }
         if let Some(ref input) = self.input_mode {
             self.render_input_overlay(f, input);
         }
@@ -629,7 +766,7 @@ impl App {
     fn render_status(&self, f: &mut Frame, area: Rect) {
         let border_style = Style::default().fg(Color::Gray);
         let block = Block::default()
-            .title(" 安装状态 ")
+            .title(format!(" {} ", i18n::tr("section.status", self.lang)))
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -637,7 +774,7 @@ impl App {
         f.render_widget(block, area);
 
         let lines: Vec<Line> = if self.status_lines.is_empty() {
-            vec![Line::from("（正在加载…）")]
+            vec![Line::from(i18n::tr("tui.status.loading", self.lang))]
         } else {
             self.status_lines
                 .iter()
@@ -649,8 +786,7 @@ impl App {
         let p = Paragraph::new(text).wrap(Wrap { trim: false });
         f.render_widget(p, inner);
 
-        // Refresh hint
-        let hint = Paragraph::new("R — 刷新状态")
+        let hint = Paragraph::new(i18n::tr("tui.shortcuts.refresh", self.lang))
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Right);
         f.render_widget(hint, Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1));
@@ -664,14 +800,13 @@ impl App {
             Style::default().fg(Color::Gray)
         };
         let block = Block::default()
-            .title(" 补丁操作 ")
+            .title(format!(" {} ", i18n::tr("section.patches", self.lang)))
             .borders(Borders::ALL)
             .border_style(border_style);
 
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        // Build patch rows
         let mut lines: Vec<Line> = Vec::new();
         for (i, patch) in PatchRow::ALL.iter().enumerate() {
             let is_selected = focused && i == self.selected_patch;
@@ -681,28 +816,29 @@ impl App {
                 Style::default().fg(Color::White)
             };
 
-            // Patch label
             let marker = if is_selected { "▶" } else { " " };
             lines.push(Line::from(Span::styled(
-                format!("{marker} {}", patch.label()),
+                format!("{marker} {}", patch.label(self.lang)),
                 highlight,
             )));
 
-            // Buttons row
             lines.push(self.render_patch_buttons(i, is_selected, highlight));
 
-            // Model row for device / smbios
             match patch {
                 PatchRow::Device => {
                     let model = self.current_device_model();
+                    let custom = i18n::tr("tui.model.custom", self.lang);
                     let model_text = if self.custom_device_model.is_some() {
-                        format!("{} (自定义)", model)
+                        format!("{} ({custom})", model)
                     } else {
                         let preset = &device::PRESETS[self.device_model_idx];
                         format!("{} ({})", model, preset.name)
                     };
                     lines.push(Line::from(vec![
-                        Span::styled("     机型：", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("     {}：", i18n::tr("tui.model.preset", self.lang)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(
                             model_text,
                             if is_selected {
@@ -711,19 +847,26 @@ impl App {
                                 Style::default().fg(Color::Cyan)
                             },
                         ),
-                        Span::styled("  m—切换预设  c—自定义", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("  {}", i18n::tr("tui.shortcuts.model.hint", self.lang)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]));
                 }
                 PatchRow::Smbios => {
                     let model = self.current_smbios_model();
+                    let custom = i18n::tr("tui.model.custom", self.lang);
                     let model_text = if self.custom_smbios_model.is_some() {
-                        format!("{} (自定义)", model)
+                        format!("{} ({custom})", model)
                     } else {
                         let preset = &device::PRESETS[self.smbios_model_idx];
                         format!("{} ({})", model, preset.name)
                     };
                     lines.push(Line::from(vec![
-                        Span::styled("     机型：", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("     {}：", i18n::tr("tui.model.preset", self.lang)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(
                             model_text,
                             if is_selected {
@@ -732,13 +875,15 @@ impl App {
                                 Style::default().fg(Color::Cyan)
                             },
                         ),
-                        Span::styled("  m—切换预设  c—自定义", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("  {}", i18n::tr("tui.shortcuts.model.hint", self.lang)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]));
                 }
                 _ => {}
             }
 
-            // Spacer (except after last)
             if i < PatchRow::ALL.len() - 1 {
                 lines.push(Line::from(""));
             }
@@ -755,15 +900,16 @@ impl App {
         highlight: Style,
     ) -> Line<'static> {
         let patch = PatchRow::ALL[patch_idx];
+        let lang = self.lang;
         let buttons: &[(&str, Option<Button>)] = match patch {
             PatchRow::Audio => &[
-                ("WiFi", Some(Button::Wifi)),
-                ("LAN", Some(Button::Lan)),
-                ("还原", Some(Button::Revert)),
+                (i18n::tr("btn.wifi", lang), Some(Button::Wifi)),
+                (i18n::tr("btn.lan", lang), Some(Button::Lan)),
+                (i18n::tr("btn.revert", lang), Some(Button::Revert)),
             ],
             _ => &[
-                ("应用", Some(Button::Apply)),
-                ("还原", Some(Button::Revert)),
+                (i18n::tr("btn.apply", lang), Some(Button::Apply)),
+                (i18n::tr("btn.revert", lang), Some(Button::Revert)),
             ],
         };
 
@@ -788,6 +934,105 @@ impl App {
         Line::from(spans)
     }
 
+    fn render_uninstall(&self, f: &mut Frame, area: Rect) {
+        let focused = self.focused_panel == Panel::Uninstall;
+        let border_style = if focused {
+            Style::default().fg(Color::Rgb(255, 105, 0))
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let block = Block::default()
+            .title(format!(" {} ", i18n::tr("section.uninstall", self.lang)))
+            .borders(Borders::ALL)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let lang = self.lang;
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, row) in UninstallRow::ALL.iter().enumerate() {
+            let is_selected = focused && i == self.selected_uninstall;
+            let highlight = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Rgb(255, 105, 0))
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let marker = if is_selected { "▶" } else { " " };
+            lines.push(Line::from(Span::styled(
+                format!("{} {}", marker, row.label(lang)),
+                highlight,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("   {}", row.hint(lang)),
+                if is_selected {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Gray)
+                },
+            )));
+        }
+
+        if focused {
+            let warn = format!("  Enter — {}  {}", i18n::tr("tui.uninstall.key.hint", lang), i18n::tr("hint.uninstall.warn", lang));
+            lines.push(Line::from(Span::styled(
+                warn,
+                Style::default().fg(Color::Rgb(255, 180, 50)),
+            )));
+        }
+
+        let p = Paragraph::new(Text::from(lines));
+        f.render_widget(p, inner);
+    }
+
+    fn render_confirm_overlay(&self, f: &mut Frame, confirm: &ConfirmMode) {
+        let area = f.area();
+        let popup_w = 60u16;
+        let lines = confirm.message.lines().count() as u16 + 4;
+        let popup_h = lines.min(area.height.saturating_sub(4));
+        let popup_x = (area.width.saturating_sub(popup_w)) / 2;
+        let popup_y = (area.height.saturating_sub(popup_h)) / 2;
+        let popup = Rect::new(
+            popup_x,
+            popup_y,
+            popup_w.min(area.width),
+            popup_h,
+        );
+
+        let block = Block::default()
+            .title(i18n::tr("tui.confirm.title", self.lang))
+            .borders(Borders::ALL)
+            .style(
+                Style::default()
+                    .fg(Color::Rgb(255, 80, 50))
+                    .bg(Color::Rgb(30, 30, 30)),
+            );
+
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+
+        let mut text_lines: Vec<Line> = Vec::new();
+        for line in confirm.message.lines() {
+            text_lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 30)),
+            )));
+        }
+        text_lines.push(Line::from(""));
+        text_lines.push(Line::from(Span::styled(
+            i18n::tr("tui.shortcuts.confirm", self.lang),
+            Style::default()
+                .fg(Color::Rgb(255, 180, 50))
+                .bg(Color::Rgb(30, 30, 30)),
+        )));
+
+        let p = Paragraph::new(Text::from(text_lines));
+        f.render_widget(p, inner);
+    }
+
     fn render_install(&self, f: &mut Frame, area: Rect) {
         let focused = self.focused_panel == Panel::Install;
         let border_style = if focused {
@@ -796,7 +1041,7 @@ impl App {
             Style::default().fg(Color::Gray)
         };
         let block = Block::default()
-            .title(" 安装 ")
+            .title(format!(" {} ", i18n::tr("section.install", self.lang)))
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -804,9 +1049,9 @@ impl App {
         f.render_widget(block, area);
 
         let hint = if focused {
-            "按 Enter — 查看安装指引（请在命令行中使用 install 子命令）"
+            i18n::tr("tui.install.hint.focused", self.lang)
         } else {
-            "切换到本面板后按 Enter 查看安装指引"
+            i18n::tr("tui.install.hint.unfocused", self.lang)
         };
 
         let p = Paragraph::new(hint)
@@ -827,18 +1072,17 @@ impl App {
             Style::default().fg(Color::Gray)
         };
         let block = Block::default()
-            .title(" 日志 ")
+            .title(format!(" {} ", i18n::tr("section.log", self.lang)))
             .borders(Borders::ALL)
             .border_style(border_style);
 
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        // Show visible portion of log
         let visible_height = inner.height as usize;
         let total = self.log.len();
         if total == 0 {
-            let p = Paragraph::new("操作日志将显示在这里…")
+            let p = Paragraph::new(i18n::tr("hint.log.empty", self.lang))
                 .style(Style::default().fg(Color::DarkGray));
             f.render_widget(p, inner);
             return;
@@ -871,10 +1115,10 @@ impl App {
         let list = List::new(items);
         f.render_widget(list, inner);
 
-        // Scroll indicator
         if total > visible_height {
             let pct = (self.log_scroll as f64 / total as f64 * 100.0) as usize;
-            let indicator = format!("{pct}% — ↑↓/PgUp/PgDn/Home/End 滚动");
+            let scroll = i18n::tr("tui.shortcuts.scroll", self.lang);
+            let indicator = format!("{pct}% — ↑↓/PgUp/PgDn/Home/End {scroll}");
             let p = Paragraph::new(indicator)
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Right);
@@ -891,13 +1135,15 @@ impl App {
     }
 
     fn render_shortcuts(&self, f: &mut Frame, area: Rect) {
+        let lang = self.lang;
         let keys = if self.input_mode.is_some() {
-            "输入机型代号…  Enter:确认  Esc:取消  Backspace:退格"
+            i18n::tr("tui.shortcuts.input", lang)
         } else {
             match self.focused_panel {
-                Panel::Patches => "q:退出  Tab:切换面板  ↑↓:选择补丁  ←→:选择按钮  Enter:执行  R:刷新  m:切换预设  c:自定义机型",
-                Panel::Install => "q:退出  Tab:切换面板  Enter:查看安装指引",
-                Panel::Log => "q:退出  Tab:切换面板  ↑↓/PgUp/PgDn/Home/End:滚动日志",
+                Panel::Patches => i18n::tr("tui.shortcuts.patches", lang),
+                Panel::Install => i18n::tr("tui.shortcuts.install", lang),
+                Panel::Uninstall => i18n::tr("tui.shortcuts.uninstall", lang),
+                Panel::Log => i18n::tr("tui.shortcuts.log", lang),
             }
         };
 
@@ -913,7 +1159,6 @@ impl App {
 
     fn render_input_overlay(&self, f: &mut Frame, input: &InputMode) {
         let area = f.area();
-        // Center a small popup
         let popup_w = 50u16;
         let popup_h = 5u16;
         let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
@@ -921,13 +1166,14 @@ impl App {
         let popup = Rect::new(popup_x, popup_y, popup_w.min(area.width), popup_h.min(area.height));
 
         let target_label = match input.target {
-            PatchRow::Device => "设备伪装",
-            PatchRow::Smbios => "SMBIOS 伪装",
+            PatchRow::Device => i18n::tr("tui.input.device", self.lang),
+            PatchRow::Smbios => i18n::tr("tui.input.smbios", self.lang),
             _ => "",
         };
 
+        let title = i18n::tr("tui.input.title", self.lang).replace("{target_label}", target_label);
         let block = Block::default()
-            .title(format!(" 自定义机型 — {target_label} "))
+            .title(title)
             .borders(Borders::ALL)
             .style(Style::default().fg(Color::Rgb(255, 180, 50)).bg(Color::Rgb(30, 30, 30)));
 
@@ -945,7 +1191,7 @@ impl App {
             .alignment(Alignment::Left);
         f.render_widget(p, Rect::new(inner.x + 2, inner.y + 1, inner.width.saturating_sub(4), 1));
 
-        let hint = Paragraph::new("Enter 确认 · Esc 取消")
+        let hint = Paragraph::new(i18n::tr("tui.shortcuts.input.confirm", self.lang))
             .style(Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 30)))
             .alignment(Alignment::Center);
         f.render_widget(hint, Rect::new(inner.x, inner.y + 2, inner.width, 1));

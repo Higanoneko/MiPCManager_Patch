@@ -256,7 +256,16 @@ path = "src/ui/gui/main.rs"
 - ratatui 是 Rust TUI 生态事实标准
 - 事件流使用 `crossterm::event::EventStream` + tokio
 
-### ADR-003：infra 作为最底层
+### ADR-003：Slint 做 GUI
+
+**选择**：Slint 0.4（Rust + QML 风格 DSL）
+
+**原因**：
+- Slint 0.4 支持 Rust 原生编译，体积小，无需 Qt 运行时
+- Slint DSL 可声明式布局，减少手写 GUI
+- 相比起 egui, Slint 的布局和渲染更稳定，减少闪烁问题
+
+### ADR-004：infra 作为最底层
 
 **选择**：将 PE 解析、字节搜索、注册表从业务模块中提升到 `infra/`
 
@@ -265,7 +274,7 @@ path = "src/ui/gui/main.rs"
 - 字节搜索在 3 处重复实现，统一后可复用
 - 注册表操作在 2 处重复，统一后减少 winreg 直接依赖
 
-### ADR-004：patches 按功能而非按技术分类
+### ADR-005：patches 按功能而非按技术分类
 
 **选择**：`patches/locale` `patches/camera` `patches/audio` `patches/device`
 
@@ -295,8 +304,8 @@ path = "src/ui/gui/main.rs"
 
 ```text
 cargo check --lib       # 库编译
-cargo check --bin mipcm_patch   # CLI/TUI 入口
-cargo check --bin mipcm_gui     # GUI 入口
+cargo check --bin MiPCM_CLI   # CLI/TUI 入口
+cargo check --bin MiPCM_GUI     # GUI 入口
 cargo test
 cargo clippy -- -D warnings
 ```

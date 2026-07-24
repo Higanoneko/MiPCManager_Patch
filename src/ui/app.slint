@@ -1,0 +1,513 @@
+import {
+    Button,
+    LineEdit,
+    TextEdit,
+    ComboBox,
+    Spinner,
+    ScrollView,
+    CheckBox,
+} from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "MiPCM Patch";
+    default-font-size: 14px;
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    min-width: 1100px;
+    min-height: 720px;
+
+    in-out property <string> status-text;
+    in-out property <string> log-text;
+    in-out property <bool> full-features: false;
+    in-out property <string> last-error;
+    in-out property <bool> downloading: false;
+    in-out property <bool> show-confirm: false;
+    in-out property <string> confirm-desc;
+    in-out property <string> url-input;
+    in-out property <string> path-input;
+    in-out property <string> custom-model-input: "TM2424";
+    in-out property <[string]> model-presets;
+    in-out property <int> model-idx: 0;
+    in-out property <bool> custom-mode: false;
+
+    pure callback tr(string) -> string;
+
+    callback refresh();
+    callback apply-locale();
+    callback revert-locale();
+    callback apply-device(string);
+    callback revert-device();
+    callback apply-camera();
+    callback revert-camera();
+    callback apply-audio-wifi();
+    callback apply-audio-lan();
+    callback revert-audio();
+    callback diagnose-dual-nic();
+    callback fix-dual-nic();
+    callback apply-smbios(string);
+    callback revert-smbios();
+    callback download-and-install(string);
+    callback browse-installer();
+    callback start-install(string);
+    callback uninstall-msix();
+    callback request-uninstall();
+    callback confirm-uninstall();
+    callback cancel-uninstall();
+    callback clear-log();
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.tr("app.title");
+                font-size: 24px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 6px;
+                Button {
+                    text: root.tr("btn.refresh");
+                    clicked => { root.refresh(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            VerticalLayout {
+                min-width: 320px;
+                preferred-width: 360px;
+                spacing: 10px;
+
+                Rectangle {
+                    border-radius: 10px;
+                    border-width: 1px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        Text {
+                            text: root.tr("section.status");
+                            font-weight: 700;
+                            font-size: 16px;
+                        }
+
+                        TextEdit {
+                            text <=> root.status-text;
+                            read-only: true;
+                            font-size: 16px;
+                            min-height: 60px;
+                        }
+
+                        if !root.full-features: Text {
+                            text: root.tr("gui.warn.no_full");
+                            font-size: 14px;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    border-radius: 10px;
+                    border-width: 1px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            Text {
+                                text: root.tr("gui.log.title");
+                                font-weight: 700;
+                                font-size: 16px;
+                                vertical-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                Button {
+                                    text: root.tr("btn.clear-log");
+                                    clicked => { root.clear-log(); }
+                                }
+                            }
+                        }
+
+                        if root.last-error != "": Text {
+                            text: root.tr("gui.warn.recent_error") + root.last-error;
+                            color: #dc3730;
+                            font-size: 16px;
+                        }
+                        ScrollView {
+                            TextEdit {
+                                text <=> root.log-text;
+                                read-only: true;
+                                font-size: 16px;
+                            }
+                        }
+                    }
+                }
+            }
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 10px;
+
+                    Rectangle {
+                        border-radius: 10px;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 10px;
+                            Text {
+                                text: root.tr("section.patches");
+                                font-weight: 700;
+                                font-size: 16px;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.locale");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        clicked => { root.apply-locale(); }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        clicked => { root.revert-locale(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.device");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: end;
+                                    CheckBox {
+                                        text: root.tr("hint.custom");
+                                        checked <=> root.custom-mode;
+                                    }
+                                    if !root.custom-mode: ComboBox {
+                                        model: root.model-presets;
+                                        current-index <=> root.model-idx;
+                                        width: 320px;
+                                    }
+                                    if root.custom-mode: LineEdit {
+                                        text <=> root.custom-model-input;
+                                        placeholder-text: root.tr("hint.model.code");
+                                        width: 320px;
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        enabled: root.full-features;
+                                        clicked => {
+                                            if root.custom-mode {
+                                                root.apply-device(root.custom-model-input);
+                                            } else {
+                                                root.apply-device(root.model-presets[root.model-idx]);
+                                            }
+                                        }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: root.full-features;
+                                        clicked => { root.revert-device(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.camera");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        enabled: root.full-features;
+                                        clicked => { root.apply-camera(); }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: root.full-features;
+                                        clicked => { root.revert-camera(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.audio");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.wifi");
+                                        enabled: root.full-features;
+                                        clicked => { root.apply-audio-wifi(); }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.lan");
+                                        enabled: root.full-features;
+                                        clicked => { root.apply-audio-lan(); }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: root.full-features;
+                                        clicked => { root.revert-audio(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.dual-nic");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.diagnose");
+                                        enabled: root.full-features;
+                                        clicked => { root.diagnose-dual-nic(); }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.fix");
+                                        enabled: root.full-features;
+                                        clicked => { root.fix-dual-nic(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.smbios");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        enabled: root.full-features;
+                                        clicked => {
+                                            if root.custom-mode {
+                                                root.apply-smbios(root.custom-model-input);
+                                            } else {
+                                                root.apply-smbios(root.model-presets[root.model-idx]);
+                                            }
+                                        }
+                                    }
+
+                                    Button {
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: root.full-features;
+                                        clicked => { root.revert-smbios(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 10px;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 8px;
+                            Text {
+                                text: root.tr("install.title");
+                                font-weight: 700;
+                                font-size: 16px;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    text <=> root.url-input;
+                                    placeholder-text: root.tr("install.download.placeholder");
+                                }
+
+                                if root.downloading: Spinner {
+                                    indeterminate: true;
+                                }
+                                Button {
+                                    width: 166px;
+                                    primary: true;
+                                    text: root.tr("install.download.and.install");
+                                    enabled: !root.downloading && root.url-input != "";
+                                    clicked => { root.download-and-install(root.url-input); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    text <=> root.path-input;
+                                    placeholder-text: root.tr("install.file.placeholder");
+                                }
+
+                                Button {
+                                    width: 80px;
+                                    text: root.tr("btn.select");
+                                    clicked => { root.browse-installer(); }
+                                }
+
+                                Button {
+                                    width: 80px;
+                                    primary: true;
+                                    text: root.tr("btn.start-install");
+                                    enabled: root.path-input != "";
+                                    clicked => { root.start-install(root.path-input); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 10px;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 8px;
+                            Text {
+                                text: root.tr("section.uninstall");
+                                font-weight: 700;
+                                font-size: 16px;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Button {
+                                    text: root.tr("gui.uninstall.msix");
+                                    clicked => { root.uninstall-msix(); }
+                                }
+
+                                Button {
+                                    text: root.tr("gui.uninstall.product");
+                                    clicked => { root.request-uninstall(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.show-confirm: Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: #00000080;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    min-width: 380px;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 16px;
+                        Text {
+                            text: root.tr("section.confirm.uninstall");
+                            font-size: 16px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: root.confirm-desc;
+                            font-size: 16px;
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            Button {
+                                text: root.tr("btn.cancel");
+                                clicked => { root.cancel-uninstall(); }
+                            }
+
+                            Button {
+                                text: root.tr("btn.confirm");
+                                clicked => { root.confirm-uninstall(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
