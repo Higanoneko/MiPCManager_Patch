@@ -39,6 +39,11 @@ enum Command {
         #[command(subcommand)]
         action: PatchAction,
     },
+    /// 允许在快捷键设置中使用鼠标中键、右键和侧键
+    Hotkey {
+        #[command(subcommand)]
+        action: DirectoryPatchAction,
+    },
     /// MiPCAudio 音频流转广播模式（无线/有线，统一身份并修复双网卡媒体路由）
     Audio {
         #[command(subcommand)]
@@ -90,6 +95,26 @@ enum PatchAction {
     Revert {
         #[arg(long)]
         dll: Option<PathBuf>,
+        #[arg(long)]
+        no_kill: bool,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum DirectoryPatchAction {
+    /// 应用补丁
+    Apply {
+        /// 指定版本目录（默认自动探测）
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// 不自动关闭相关进程
+        #[arg(long)]
+        no_kill: bool,
+    },
+    /// 还原补丁
+    Revert {
+        #[arg(long)]
+        dir: Option<PathBuf>,
         #[arg(long)]
         no_kill: bool,
     },
@@ -277,6 +302,16 @@ fn run(cmd: Command, lang: i18n::Lang) -> Result<()> {
             }
             PatchAction::Revert { dll, no_kill } => {
                 print_log(ops::revert_camera(dll, no_kill)?);
+                Ok(())
+            }
+        },
+        Command::Hotkey { action } => match action {
+            DirectoryPatchAction::Apply { dir, no_kill } => {
+                print_log(ops::apply_mouse_hotkeys(dir, no_kill)?);
+                Ok(())
+            }
+            DirectoryPatchAction::Revert { dir, no_kill } => {
+                print_log(ops::revert_mouse_hotkeys(dir, no_kill)?);
                 Ok(())
             }
         },

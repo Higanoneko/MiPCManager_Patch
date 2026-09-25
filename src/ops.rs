@@ -6,7 +6,7 @@
 use crate::{
     experimental::smbios_spoof,
     install::{self, pc_manager_installer, xiaoai_installer},
-    patches::{ai, audio, camera, camera::dotnet, device, locale},
+    patches::{ai, audio, camera, camera::dotnet, device, hotkey, locale},
     uninstall,
 };
 use anyhow::{Context, Result, bail};
@@ -43,6 +43,7 @@ pub const PROC_MIPCM_ALL: &[&str] = &[
 /// 各功能在打补丁前需要关闭的进程（不含扩展名）。补丁后由用户手动重新打开。
 pub const PROC_LOCALE: &[&str] = &["micont_service"];
 pub const PROC_CAMERA: &[&str] = &["XiaomiPcManager"];
+pub const PROC_HOTKEY: &[&str] = &["XiaomiPcManager", "XiaomiPcHost"];
 pub const PROC_AUDIO: &[&str] = &["MiPCAudio", "MiPlayCastService", "MAFSvr", "MASFvr"];
 pub const PROC_DEVICE: &[&str] = &["XiaomiPcManager"];
 pub const PROC_SMBIOS: &[&str] = &["micont_service"];
@@ -150,6 +151,15 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
             out.push(format!("最新版本目录：{}", version.display()));
             push_file_status(&version.join(locale::TARGET_DLL), out);
             push_file_status(&version.join(camera::TARGET_DLL), out);
+            let hotkey_path = version.join(hotkey::TARGET_RELATIVE_PATH);
+            let hotkey_state = if hotkey_path.exists() {
+                hotkey::current_state(&hotkey_path)
+                    .map(|state| state.label().to_string())
+                    .unwrap_or_else(|error| format!("读取失败：{error}"))
+            } else {
+                "目标文件不存在".to_string()
+            };
+            out.push(format!("  鼠标快捷键: {hotkey_state}"));
             out.push("  -- 音频流转广播模式 --".to_string());
             for (file, state) in audio::current_state(&version) {
                 out.push(format!("     {file}: {state}"));
@@ -321,6 +331,60 @@ pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
         &mut log,
         || camera::revert(&path),
         |_| vec![format!("✓ 已还原摄像头弹窗补丁：{}", path.display())],
+    )?;
+    log.push(RESTART_HINT.to_string());
+    Ok(log)
+}
+
+// ===================== 鼠标快捷键 =====================
+
+pub fn apply_mouse_hotkeys(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    let dir = resolve_full_version_dir_or(dir)?;
+    let path = dir.join(hotkey::TARGET_RELATIVE_PATH);
+    if !path.is_file() {
+        bail!("在 {} 中未找到快捷键设置脚本", path.display());
+    }
+    let mut log = Vec::new();
+    run_patch(
+        &PatchOp {
+            procs: PROC_HOTKEY,
+            required: false,
+            no_kill,
+        },
+        &mut log,
+        || hotkey::apply(&path),
+        |outcome| {
+            vec![match outcome {
+                hotkey::PatchOutcome::Patched => {
+                    format!("✓ 鼠标快捷键补丁已应用：{}", path.display())
+                }
+                hotkey::PatchOutcome::AlreadyPatched => {
+                    format!("• 已是补丁状态（跳过）：{}", path.display())
+                }
+            }]
+        },
+    )?;
+    log.push("  现在可在快捷键输入框中按鼠标中键、右键或两个侧键进行设置。".to_string());
+    log.push(RESTART_HINT.to_string());
+    Ok(log)
+}
+
+pub fn revert_mouse_hotkeys(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    let dir = resolve_full_version_dir_or(dir)?;
+    let path = dir.join(hotkey::TARGET_RELATIVE_PATH);
+    if !path.is_file() {
+        bail!("在 {} 中未找到快捷键设置脚本", path.display());
+    }
+    let mut log = Vec::new();
+    run_patch(
+        &PatchOp {
+            procs: PROC_HOTKEY,
+            required: false,
+            no_kill,
+        },
+        &mut log,
+        || hotkey::revert(&path),
+        |_| vec![format!("✓ 已还原鼠标快捷键补丁：{}", path.display())],
     )?;
     log.push(RESTART_HINT.to_string());
     Ok(log)
