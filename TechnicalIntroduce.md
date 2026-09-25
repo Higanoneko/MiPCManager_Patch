@@ -30,6 +30,7 @@
 |---|---|
 | 地区伪装 | `micont_service.exe` |
 | 摄像头弹窗 | `XiaomiPcManager.exe` |
+| 鼠标快捷键 | `XiaomiPcManager.exe`、`XiaomiPcHost.exe` |
 | 音频流转 | `MiPCAudio.exe`、`MiPlayCastService.exe`、`MAFSvr.exe` |
 | 设备伪装 | `XiaomiPcManager.exe` |
 | 超级小爱 | `XiaoaiAgent.exe` |
@@ -90,7 +91,28 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 代码：[`src/patches/camera/mod.rs`](src/patches/camera/mod.rs)、[`src/patches/camera/dotnet/`](src/patches/camera/dotnet/)、[`src/infra/pe.rs`](src/infra/pe.rs)
 
-## 补丁三：MiPCAudio 音频流转「无线 / 有线」模式
+## 补丁三：鼠标快捷键（含两个侧键）
+
+**目标**：`dist/static/js/main.js`（小米电脑管家设置页的压缩 Web 资源）
+
+快捷键配置链路由三层组成：设置页通过 `hot_key` 字段提交由 `+` 分隔的按键名；`XiaomiPcManager.dll` 中的 `JsSetShareDesktopHandler` / `JsSetSearchFileHandler` 将其拆成最多三个字符串并交给 `MiSmartShareClrWrapper`；`MiScreenShare.exe` 中可见配置路径 `Software\Timi Personal Computing\MiScreenShare\ShortCutKey` 以及 `go_back`、`go_home`、`switch_task`、`open_clipboard`、`open_ai_search` 等动作名。实际快捷键值并非安装目录中的 INI 配置。
+
+快捷键设置组件原本只在 `onMouseDown` 中处理中键和右键，分别向后端写入 `MMouseButtonDown` 与 `RMouseButtonDown`；“打开搜索”一项还通过 `disableMiddleKey` / `disableRightKey` 禁用了这两种输入。鼠标前进、后退侧键对应的浏览器 `MouseEvent.button` 值为 3、4，但原设置页未处理。
+
+对 5.8.0.95 的原生程序分析确认，`MiScreenShare.exe` 已包含并处理 `XMouseButtonDown` 与 `XMouseButtonDown2`。因此补丁只需补齐设置页映射：
+
+| 鼠标输入 | 配置值 |
+|---|---|
+| 中键 | `MMouseButtonDown` |
+| 右键 | `RMouseButtonDown` |
+| 侧键 1（后退） | `XMouseButtonDown` |
+| 侧键 2（前进） | `XMouseButtonDown2` |
+
+补丁还解除“打开搜索”对中键和右键的界面禁用。左键用于聚焦输入框且底层没有对应快捷键配置值，因此不纳入补丁。实现使用两组唯一文本特征，不依赖固定文件偏移；版本结构不匹配时会拒绝写入。原始 `main.js` 自动保存为 `.orig.bak`，重复应用幂等，还原时直接恢复备份。
+
+代码：[`src/patches/hotkey/mod.rs`](src/patches/hotkey/mod.rs)
+
+## 补丁四：MiPCAudio 音频流转「无线 / 有线」模式
 
 **目标**：`MiPCAudio.exe` + `idmruntime.dll`（均为原生 PE）
 
@@ -126,7 +148,7 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 代码：[`src/patches/audio/mod.rs`](src/patches/audio/mod.rs)
 
-## 补丁四：设备伪装（DeviceSpoof）
+## 补丁五：设备伪装（DeviceSpoof）
 
 **目标**：在 `XiaomiPcManager.exe` 同目录释放代理 `msimg32.dll` + 写入注册表机型。
 
@@ -202,6 +224,7 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 | 进程管理 | 应用或还原补丁前，按功能结束可能占用目标文件的相关进程 | 用户可重新启动对应程序；超级小爱按提示重启电脑 |
 | 地区伪装 | 修改 `micont_rtm.dll` 中读取的值名，并写入 `HKCU\Control Panel\International\Geo\XCN` | 从 `.orig.bak` 恢复 DLL，并删除 `XCN` 值 |
 | 摄像头弹窗 | 为 `PcControlCenter.dll` 追加 `.mipatch` 节并改写目标方法 RVA | 从 `.orig.bak` 恢复原 DLL |
+| 鼠标快捷键 | 修改 `dist/static/js/main.js`，捕获两个侧键并解除搜索项的中键/右键禁用 | 从 `main.js.orig.bak` 恢复原文件 |
 | 音频流转 | 等长修改 `MiPCAudio.exe` 与 `idmruntime.dll` 的三处网卡类型判断 | 从 `.orig.bak` 恢复原文件 |
 | 有线音频路由 | 在有线模式下按需创建 metric=1 的持久 Wi-Fi 本地子网路由，并在版本目录记录 `.mipcm_audio_wifi_route` | 只删除本工具有状态记录的路由和状态文件 |
 | 设备伪装 | 向小米电脑管家版本目录部署 `msimg32.dll`，并写入 `HKCU\Software\SmartSharePatch\SpoofDevice` | 恢复或删除代理 DLL，并删除注册表值 |
@@ -233,6 +256,7 @@ src/
 ├── patches/
 │   ├── locale/mod.rs            # 地区伪装
 │   ├── camera/                  # 摄像头弹窗抑制与 .NET 方法体处理
+│   ├── hotkey/mod.rs            # 鼠标中键、右键与侧键快捷键
 │   ├── audio/mod.rs             # 音频流转与 Wi-Fi 本地路由
 │   ├── device/                  # 设备伪装及内嵌 msimg32.dll
 │   └── ai/                      # 超级小爱及内嵌 userenv.dll

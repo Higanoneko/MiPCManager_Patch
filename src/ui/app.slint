@@ -50,6 +50,8 @@ export component AppWindow inherits Window {
     callback revert-device();
     callback apply-camera();
     callback revert-camera();
+    callback apply-hotkey();
+    callback revert-hotkey();
     callback apply-audio-wifi();
     callback apply-audio-lan();
     callback revert-audio();
@@ -291,6 +293,36 @@ export component AppWindow inherits Window {
                                         text: root.tr("btn.revert");
                                         enabled: root.full-features;
                                         clicked => { root.revert-camera(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.hotkey");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        height: 30px;
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        enabled: root.full-features;
+                                        clicked => { root.apply-hotkey(); }
+                                    }
+
+                                    Button {
+                                        height: 30px;
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: root.full-features;
+                                        clicked => { root.revert-hotkey(); }
                                     }
                                 }
                             }

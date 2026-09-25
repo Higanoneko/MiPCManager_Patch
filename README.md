@@ -12,6 +12,7 @@
 |---|---|
 | 🗺️ **地区伪装** | 让小米电脑管家读取指定的地区值（默认 `CN`），不修改系统真实地区 |
 | 📷 **抑制摄像头误报弹窗** | 屏蔽「摄像头暂不可用，点击确定打开设备管理器」这类本机摄像头被误判禁用的弹窗 |
+| 🖱️ **鼠标快捷键** | 允许把鼠标中键、右键和两个侧键设为小米电脑管家快捷键 |
 | 🔊 **音频流转增强** | 在无线 WiFi 与有线 LAN 之间切换音频流转的网络介质 |
 | 💻 **设备伪装** | 伪装为指定机型，解锁机型相关功能 |
 | 📦 **安装小米电脑管家** | 自动查找或下载安装包，释放必要的补丁文件后启动安装 |
@@ -52,6 +53,10 @@ MiPCM_CLI.exe locale revert
 # 抑制摄像头弹窗
 MiPCM_CLI.exe camera apply
 MiPCM_CLI.exe camera revert
+
+# 鼠标快捷键（含两个侧键）
+MiPCM_CLI.exe hotkey apply
+MiPCM_CLI.exe hotkey revert
 
 # 音频流转
 MiPCM_CLI.exe audio apply --mode lan     # 有线模式
@@ -101,7 +106,7 @@ MiPCM_CLI.exe xiaoai revert
 <details>
 <summary>只安装了「小米互联 / 互联互通」能用吗？</summary>
 
-「小米互联 / 互联互通」(PcContinuity / HyperConnect 2.0) 仅支持**地区伪装**功能。摄像头弹窗、音频流转、设备伪装等功能需要完整版「小米电脑管家」(XiaomiPCManager)。
+「小米互联 / 互联互通」(PcContinuity / HyperConnect 2.0) 仅支持**地区伪装**功能。摄像头弹窗、鼠标快捷键、音频流转、设备伪装等功能需要完整版「小米电脑管家」(XiaomiPCManager)。
 </details>
 
 <details>

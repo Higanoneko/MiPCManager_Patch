@@ -69,6 +69,7 @@ impl Tab {
 enum PatchRow {
     Locale,
     Camera,
+    Hotkey,
     Audio,
     Device,
     Xiaoai,
@@ -81,6 +82,7 @@ impl PatchRow {
         &[
             PatchRow::Locale,
             PatchRow::Camera,
+            PatchRow::Hotkey,
             PatchRow::Audio,
             PatchRow::Device,
             PatchRow::Xiaoai,
@@ -93,6 +95,7 @@ impl PatchRow {
         match self {
             PatchRow::Locale => i18n::tr("patch.locale.detail", lang),
             PatchRow::Camera => i18n::tr("patch.camera.detail", lang),
+            PatchRow::Hotkey => i18n::tr("patch.hotkey.detail", lang),
             PatchRow::Audio => i18n::tr("patch.audio.detail", lang),
             PatchRow::Device => i18n::tr("patch.device.detail", lang),
             PatchRow::Xiaoai => i18n::tr("patch.xiaoai.detail", lang),
@@ -105,6 +108,7 @@ impl PatchRow {
         match self {
             PatchRow::Locale => i18n::tr("patch.locale.desc", lang),
             PatchRow::Camera => i18n::tr("patch.camera.desc", lang),
+            PatchRow::Hotkey => i18n::tr("patch.hotkey.desc", lang),
             PatchRow::Audio => i18n::tr("patch.audio.desc", lang),
             PatchRow::Device => i18n::tr("patch.device.desc", lang),
             PatchRow::Xiaoai => i18n::tr("patch.xiaoai.desc", lang),
@@ -152,6 +156,18 @@ impl PatchRow {
             (PatchRow::Camera, 1) => {
                 let label = i18n::tr("tui.op.camera.revert", lang).to_string();
                 spawn_op(tx.clone(), label, lang, || ops::revert_camera(None, false));
+            }
+            (PatchRow::Hotkey, 0) => {
+                let label = i18n::tr("tui.op.hotkey.apply", lang).to_string();
+                spawn_op(tx.clone(), label, lang, || {
+                    ops::apply_mouse_hotkeys(None, false)
+                });
+            }
+            (PatchRow::Hotkey, 1) => {
+                let label = i18n::tr("tui.op.hotkey.revert", lang).to_string();
+                spawn_op(tx.clone(), label, lang, || {
+                    ops::revert_mouse_hotkeys(None, false)
+                });
             }
             (PatchRow::Audio, 0) => {
                 let label = i18n::tr("tui.op.audio.wifi", lang).to_string();

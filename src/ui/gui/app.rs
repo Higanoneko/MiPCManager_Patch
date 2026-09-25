@@ -171,6 +171,26 @@ fn setup_callbacks(app: &AppWindow, lang: i18n::Lang) {
         }
     });
 
+    app.on_apply_hotkey({
+        let app_weak = app_weak.clone();
+        move || {
+            let app = app_weak.unwrap();
+            run_patch(&app, i18n::tr("gui.op.hotkey.apply", lang), || {
+                ops::apply_mouse_hotkeys(None, false)
+            });
+        }
+    });
+
+    app.on_revert_hotkey({
+        let app_weak = app_weak.clone();
+        move || {
+            let app = app_weak.unwrap();
+            run_patch(&app, i18n::tr("gui.op.hotkey.revert", lang), || {
+                ops::revert_mouse_hotkeys(None, false)
+            });
+        }
+    });
+
     app.on_apply_audio_wifi({
         let app_weak = app_weak.clone();
         move || {
