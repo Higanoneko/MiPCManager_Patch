@@ -6,7 +6,7 @@
 use crate::{
     experimental::smbios_spoof,
     install::{self, pc_manager_installer, xiaoai_installer},
-    patches::{ai, audio, camera, camera::dotnet, device, locale},
+    patches::{ai, audio, camera, camera::dotnet, device, locale, xiaomi_share_menu},
     uninstall,
 };
 use anyhow::{Context, Result, bail};
@@ -98,7 +98,6 @@ pub fn status_lines() -> Vec<String> {
     let xiaoai_root = install::find_xiaoai_root();
     if manager_root.is_none() && continuity_root.is_none() && xiaoai_root.is_none() {
         out.push("未探测到安装目录（可用 --dll/--dir 手动指定）。".to_string());
-        return out;
     }
     if let Some(root) = manager_root {
         out.push(String::new());
@@ -107,7 +106,10 @@ pub fn status_lines() -> Vec<String> {
     }
     if let Some(root) = continuity_root {
         out.push(String::new());
-        out.push("-- 小米互联 / 互联互通（HyperConnect / PcContinuity，仅地区伪装）--".to_string());
+        out.push(
+            "-- 小米互联 / 互联互通（HyperConnect / PcContinuity，文件补丁仅地区伪装）--"
+                .to_string(),
+        );
         out.push(format!("安装根目录：{}", root.display()));
         match install::latest_version_dir(&root) {
             Ok(version) => {
@@ -140,6 +142,16 @@ pub fn status_lines() -> Vec<String> {
             Err(error) => out.push(format!("（无法确定版本目录：{error}）")),
         }
     }
+    out.push("  -- Windows 11 右键小米互传 --".to_string());
+    let share_state = xiaomi_share_menu::current_state();
+    out.push(format!(
+        "     一级右键菜单: {}",
+        match share_state {
+            xiaomi_share_menu::ShellMenuState::Enabled => "已启用",
+            xiaomi_share_menu::ShellMenuState::Disabled => "未启用",
+            xiaomi_share_menu::ShellMenuState::Partial => "状态不完整（可重新应用修复）",
+        }
+    ));
     out
 }
 
@@ -218,6 +230,54 @@ where
     let result = retry_patch_after_access_denied(op.procs, log, action)?;
     log.extend(on_success(&result));
     Ok(())
+}
+
+// ===================== Windows 11 右键小米互传 =====================
+
+pub fn apply_xiaomi_share_menu() -> Result<Vec<String>> {
+    let mut log = Vec::new();
+    run_patch(
+        &PatchOp {
+            procs: &[],
+            required: false,
+            no_kill: true,
+        },
+        &mut log,
+        xiaomi_share_menu::apply,
+        |outcome| match outcome {
+            xiaomi_share_menu::PatchOutcome::Applied => {
+                vec!["✓ 已启用 Windows 11 一级右键“使用小米互传发送”".to_string()]
+            }
+            xiaomi_share_menu::PatchOutcome::AlreadyApplied => {
+                vec!["• Windows 11 右键小米互传已启用（跳过）".to_string()]
+            }
+            _ => vec![],
+        },
+    )?;
+    Ok(log)
+}
+
+pub fn revert_xiaomi_share_menu() -> Result<Vec<String>> {
+    let mut log = Vec::new();
+    run_patch(
+        &PatchOp {
+            procs: &[],
+            required: false,
+            no_kill: true,
+        },
+        &mut log,
+        xiaomi_share_menu::revert,
+        |outcome| match outcome {
+            xiaomi_share_menu::PatchOutcome::Reverted => {
+                vec!["✓ 已关闭 Windows 11 一级右键小米互传并清理相关组件".to_string()]
+            }
+            xiaomi_share_menu::PatchOutcome::AlreadyReverted => {
+                vec!["• Windows 11 右键小米互传已关闭（跳过）".to_string()]
+            }
+            _ => vec![],
+        },
+    )?;
+    Ok(log)
 }
 
 // ===================== 地区伪装 =====================
@@ -799,7 +859,7 @@ pub fn resolve_full_version_dir_from_roots(
     }
     if continuity_root.is_some() {
         bail!(
-            "小米互联 / 互联互通（HyperConnect / PcContinuity）暂时仅支持地区伪装，其他功能不可用"
+            "小米互联 / 互联互通（HyperConnect / PcContinuity）仅支持地区伪装和 Windows 11 右键小米互传；此功能需要完整版小米电脑管家"
         );
     }
     bail!("未找到 XiaomiPCManager 安装目录")
@@ -843,7 +903,7 @@ pub fn ensure_full_feature_path_supported(
     let normalized_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     if normalized_path.starts_with(&normalized_root) {
         bail!(
-            "小米互联 / 互联互通（HyperConnect / PcContinuity）暂时仅支持地区伪装，其他功能不可用"
+            "小米互联 / 互联互通（HyperConnect / PcContinuity）仅支持地区伪装和 Windows 11 右键小米互传；此功能需要完整版小米电脑管家"
         );
     }
     Ok(())
@@ -980,7 +1040,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("暂时仅支持地区伪装"));
+        assert!(error.contains("仅支持地区伪装和 Windows 11 右键小米互传"));
         fs::remove_dir_all(continuity_root).unwrap();
     }
 
@@ -994,7 +1054,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("暂时仅支持地区伪装"));
+        assert!(error.contains("仅支持地区伪装和 Windows 11 右键小米互传"));
         fs::remove_dir_all(continuity_root).unwrap();
     }
 

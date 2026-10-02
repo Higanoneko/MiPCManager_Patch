@@ -5,10 +5,13 @@
 #[cfg(windows)]
 use anyhow::Context;
 use anyhow::{Result, bail};
+use std::ffi::OsStr;
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStringExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::Command;
@@ -16,6 +19,8 @@ use std::process::Command;
 use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar};
 #[cfg(windows)]
 use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 #[cfg(windows)]
 const UTF8_OUTPUT_COMMAND: &str = "$OutputEncoding = [Console]::OutputEncoding = \
@@ -23,13 +28,35 @@ const UTF8_OUTPUT_COMMAND: &str = "$OutputEncoding = [Console]::OutputEncoding =
     & ([ScriptBlock]::Create($env:MIPCM_POWERSHELL_SCRIPT))";
 
 /// 执行 PowerShell 命令并返回 stdout。
-///
-/// 非零退出码时：若 stdout 有内容则返回 stdout（部分 cmdlet 如
-/// `Get-AppxPackage` 可能同时输出有效数据与警告），否则 bail。
+/// 保留项目既有兼容行为：非零退出码时，若 stdout 有内容则返回 stdout。
 #[cfg(windows)]
 pub fn run_powershell(script: &str) -> Result<String> {
+    run_powershell_impl(script, &[], false)
+}
+
+/// 严格执行 PowerShell 命令。任何非零退出码都视为失败。
+#[cfg(windows)]
+pub fn run_powershell_strict(script: &str) -> Result<String> {
+    run_powershell_with_env_strict(script, &[])
+}
+
+/// 严格执行 PowerShell 命令，并将动态数据作为环境变量传入。
+///
+/// 路径、URL 等外部数据不应插值到 PowerShell 源码中；通过环境变量传递可避免
+/// 引号、反引号、`$()` 等字符参与脚本解析。
+///
+/// 任何非零退出码都返回错误，同时保留 stdout/stderr 便于诊断。
+#[cfg(windows)]
+pub fn run_powershell_with_env_strict(script: &str, env_vars: &[(&str, &OsStr)]) -> Result<String> {
+    run_powershell_impl(script, env_vars, true)
+}
+
+#[cfg(windows)]
+fn run_powershell_impl(script: &str, env_vars: &[(&str, &OsStr)], strict: bool) -> Result<String> {
     let powershell = system_powershell_path()?;
-    let output = Command::new(&powershell)
+    let mut command = Command::new(&powershell);
+    command
+        .creation_flags(CREATE_NO_WINDOW)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -37,21 +64,29 @@ pub fn run_powershell(script: &str) -> Result<String> {
             "-Command",
             UTF8_OUTPUT_COMMAND,
         ])
-        .env("MIPCM_POWERSHELL_SCRIPT", script)
+        .env("MIPCM_POWERSHELL_SCRIPT", script);
+    for (name, value) in env_vars {
+        command.env(name, value);
+    }
+    let output = command
         .output()
         .with_context(|| format!("无法启动系统 Windows PowerShell：{}", powershell.display()))?;
     let stdout = decode_powershell_output(&output.stdout);
     if !output.status.success() {
         let trimmed_stdout = stdout.trim();
-        let stderr = decode_powershell_output(&output.stderr);
-        let trimmed_stderr = stderr.trim();
-        if !trimmed_stdout.is_empty() {
+        if !strict && !trimmed_stdout.is_empty() {
             return Ok(stdout);
         }
-        if !trimmed_stderr.is_empty() {
-            bail!("PowerShell 执行失败：{trimmed_stderr}");
+        let stderr = decode_powershell_output(&output.stderr);
+        let trimmed_stderr = stderr.trim();
+        match (trimmed_stdout.is_empty(), trimmed_stderr.is_empty()) {
+            (false, false) => {
+                bail!("PowerShell 执行失败；stdout: {trimmed_stdout}；stderr: {trimmed_stderr}")
+            }
+            (false, true) => bail!("PowerShell 执行失败；stdout: {trimmed_stdout}"),
+            (true, false) => bail!("PowerShell 执行失败：{trimmed_stderr}"),
+            (true, true) => bail!("PowerShell 执行失败（无输出）"),
         }
-        bail!("PowerShell 执行失败（无输出）");
     }
     Ok(stdout)
 }
@@ -140,13 +175,26 @@ pub fn run_powershell(_script: &str) -> Result<String> {
 }
 
 #[cfg(not(windows))]
+pub fn run_powershell_strict(_script: &str) -> Result<String> {
+    bail!("PowerShell 仅支持 Windows")
+}
+
+#[cfg(not(windows))]
+pub fn run_powershell_with_env_strict(
+    _script: &str,
+    _env_vars: &[(&str, &OsStr)],
+) -> Result<String> {
+    bail!("PowerShell 仅支持 Windows")
+}
+
+#[cfg(not(windows))]
 pub(crate) fn system_powershell_path() -> Result<PathBuf> {
     bail!("系统 Windows PowerShell 仅支持 Windows")
 }
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::decode_windows_code_page;
+    use super::{decode_windows_code_page, run_powershell, run_powershell_strict};
 
     #[test]
     fn decodes_cp936_output() {
@@ -155,5 +203,19 @@ mod tests {
             decode_windows_code_page(&encoded, 936).as_deref(),
             Some("编码测试")
         );
+    }
+
+    #[test]
+    fn strict_execution_rejects_nonzero_exit_with_stdout() {
+        let error = run_powershell_strict("'partial'; throw 'failed'").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("partial"));
+        assert!(message.contains("failed"));
+    }
+
+    #[test]
+    fn legacy_execution_preserves_stdout_on_nonzero_exit() {
+        let output = run_powershell("'partial'; throw 'failed'").unwrap();
+        assert_eq!(output.trim(), "partial");
     }
 }

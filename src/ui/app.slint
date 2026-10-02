@@ -29,6 +29,7 @@ export component AppWindow inherits Window {
     in-out property <length> log-viewport-y: 0px;
     in-out property <bool> downloading: false;
     in-out property <bool> xiaoai-busy: false;
+    in-out property <bool> share-menu-busy: false;
     in-out property <bool> show-confirm: false;
     in-out property <string> confirm-desc;
     in-out property <string> url-input;
@@ -44,6 +45,8 @@ export component AppWindow inherits Window {
     pure callback tr(string) -> string;
 
     callback refresh();
+    callback apply-xiaomi-share-menu();
+    callback revert-xiaomi-share-menu();
     callback apply-locale();
     callback revert-locale();
     callback apply-device(string);
@@ -426,6 +429,36 @@ export component AppWindow inherits Window {
                                         text: root.tr("btn.revert");
                                         enabled: root.full-features;
                                         clicked => { root.revert-smbios(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: root.tr("patch.share-menu");
+                                    vertical-alignment: center;
+                                    min-width: 90px;
+                                    font-size: 16px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        height: 30px;
+                                        width: 80px;
+                                        primary: true;
+                                        text: root.tr("btn.apply");
+                                        enabled: !root.share-menu-busy;
+                                        clicked => { root.apply-xiaomi-share-menu(); }
+                                    }
+
+                                    Button {
+                                        height: 30px;
+                                        width: 80px;
+                                        text: root.tr("btn.revert");
+                                        enabled: !root.share-menu-busy;
+                                        clicked => { root.revert-xiaomi-share-menu(); }
                                     }
                                 }
                             }

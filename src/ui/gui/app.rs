@@ -100,6 +100,23 @@ fn spawn_xiaoai_operation(
 }
 
 #[cfg(windows)]
+fn spawn_xiaomi_share_operation(
+    app_weak: slint::Weak<AppWindow>,
+    label: String,
+    operation: impl FnOnce() -> Result<Vec<String>> + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let result = operation();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_share_menu_busy(false);
+                append_log(&app, &label, result);
+            }
+        });
+    });
+}
+
+#[cfg(windows)]
 fn setup_callbacks(app: &AppWindow, lang: i18n::Lang) {
     let app_weak = app.as_weak();
 
@@ -108,6 +125,38 @@ fn setup_callbacks(app: &AppWindow, lang: i18n::Lang) {
         move || {
             let app = app_weak.unwrap();
             refresh(&app);
+        }
+    });
+
+    app.on_apply_xiaomi_share_menu({
+        let app_weak = app_weak.clone();
+        move || {
+            let app = app_weak.unwrap();
+            if app.get_share_menu_busy() {
+                return;
+            }
+            app.set_share_menu_busy(true);
+            spawn_xiaomi_share_operation(
+                app_weak.clone(),
+                i18n::tr("gui.op.share-menu.apply", lang).to_string(),
+                ops::apply_xiaomi_share_menu,
+            );
+        }
+    });
+
+    app.on_revert_xiaomi_share_menu({
+        let app_weak = app_weak.clone();
+        move || {
+            let app = app_weak.unwrap();
+            if app.get_share_menu_busy() {
+                return;
+            }
+            app.set_share_menu_busy(true);
+            spawn_xiaomi_share_operation(
+                app_weak.clone(),
+                i18n::tr("gui.op.share-menu.revert", lang).to_string(),
+                ops::revert_xiaomi_share_menu,
+            );
         }
     });
 

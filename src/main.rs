@@ -54,6 +54,11 @@ enum Command {
         #[command(subcommand)]
         action: SmbiosAction,
     },
+    /// Windows 11 一级右键“使用小米互传发送”
+    ShareMenu {
+        #[command(subcommand)]
+        action: ShareMenuAction,
+    },
     /// 安装小米电脑管家 / 小米互联（自动识别安装包所属产品）
     Install {
         /// 显式指定 .exe 安装包
@@ -93,6 +98,14 @@ enum PatchAction {
         #[arg(long)]
         no_kill: bool,
     },
+}
+
+#[derive(Subcommand, Clone)]
+enum ShareMenuAction {
+    /// 启用右键菜单
+    Apply,
+    /// 关闭右键菜单并清理组件
+    Revert,
 }
 
 #[derive(Subcommand, Clone)]
@@ -267,6 +280,16 @@ fn run(cmd: Command, lang: i18n::Lang) -> Result<()> {
             }
             PatchAction::Revert { dll, no_kill } => {
                 print_log(ops::revert_locale(dll, !no_registry, no_kill)?);
+                Ok(())
+            }
+        },
+        Command::ShareMenu { action } => match action {
+            ShareMenuAction::Apply => {
+                print_log(ops::apply_xiaomi_share_menu()?);
+                Ok(())
+            }
+            ShareMenuAction::Revert => {
+                print_log(ops::revert_xiaomi_share_menu()?);
                 Ok(())
             }
         },
