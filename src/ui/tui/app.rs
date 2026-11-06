@@ -13,10 +13,9 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 use crate::{
-    experimental::audio_dual_nic,
+    devicelist,
     i18n::{self, Lang},
     ops::{self, BroadcastMode},
-    patches::device::PRESETS,
 };
 
 use super::{theme, widgets};
@@ -73,22 +72,23 @@ enum PatchRow {
     Audio,
     Device,
     Xiaoai,
-    Smbios,
-    DualNic,
 }
 
 impl PatchRow {
-    fn all() -> &'static [PatchRow] {
-        &[
+    /// 6.0 及以上版本不再需要摄像头弹窗补丁，自动从菜单移除。
+    fn all() -> Vec<PatchRow> {
+        let mut rows = vec![
             PatchRow::Locale,
             PatchRow::Camera,
             PatchRow::Hotkey,
             PatchRow::Audio,
             PatchRow::Device,
             PatchRow::Xiaoai,
-            PatchRow::Smbios,
-            PatchRow::DualNic,
-        ]
+        ];
+        if !ops::camera_hook_available() {
+            rows.retain(|row| *row != PatchRow::Camera);
+        }
+        rows
     }
 
     fn label(&self, lang: Lang) -> &'static str {
@@ -99,8 +99,6 @@ impl PatchRow {
             PatchRow::Audio => i18n::tr("patch.audio.detail", lang),
             PatchRow::Device => i18n::tr("patch.device.detail", lang),
             PatchRow::Xiaoai => i18n::tr("patch.xiaoai.detail", lang),
-            PatchRow::Smbios => i18n::tr("patch.smbios.detail", lang),
-            PatchRow::DualNic => i18n::tr("patch.dualnic.detail", lang),
         }
     }
 
@@ -112,8 +110,6 @@ impl PatchRow {
             PatchRow::Audio => i18n::tr("patch.audio.desc", lang),
             PatchRow::Device => i18n::tr("patch.device.desc", lang),
             PatchRow::Xiaoai => i18n::tr("patch.xiaoai.desc", lang),
-            PatchRow::Smbios => i18n::tr("patch.smbios.desc", lang),
-            PatchRow::DualNic => i18n::tr("patch.dualnic.desc", lang),
         }
     }
 
@@ -123,10 +119,6 @@ impl PatchRow {
                 i18n::tr("btn.wifi", lang).to_string(),
                 i18n::tr("btn.lan", lang).to_string(),
                 i18n::tr("btn.revert", lang).to_string(),
-            ],
-            PatchRow::DualNic => vec![
-                i18n::tr("btn.dualnic.diagnose", lang).to_string(),
-                i18n::tr("btn.dualnic.fix", lang).to_string(),
             ],
             _ => vec![
                 i18n::tr("btn.apply", lang).to_string(),
@@ -204,29 +196,6 @@ impl PatchRow {
                 let label = i18n::tr("tui.op.xiaoai.revert", lang).to_string();
                 spawn_op(tx.clone(), label, lang, || ops::revert_xiaoai(None, false));
             }
-            (PatchRow::Smbios, 0) => {
-                let model = app.current_smbios_model().to_string();
-                let label = i18n::tr("tui.op.smbios.apply", lang).replace("{model}", &model);
-                spawn_op(tx.clone(), label, lang, move || {
-                    ops::apply_smbios(Some(&model), None, false)
-                });
-            }
-            (PatchRow::Smbios, 1) => {
-                let label = i18n::tr("tui.op.smbios.revert", lang).to_string();
-                spawn_op(tx.clone(), label, lang, || ops::revert_smbios(None, false));
-            }
-            (PatchRow::DualNic, 0) => {
-                let label = "双网卡诊断".to_string();
-                spawn_op(tx.clone(), label, lang, || {
-                    audio_dual_nic::diagnose(&ops::resolve_full_version_dir()?)
-                });
-            }
-            (PatchRow::DualNic, 1) => {
-                let label = "双网卡修复".to_string();
-                spawn_op(tx.clone(), label, lang, || {
-                    audio_dual_nic::auto_fix(&ops::resolve_full_version_dir()?)
-                });
-            }
             _ => {}
         }
     }
@@ -275,9 +244,7 @@ pub struct App {
     log_scroll: usize,
 
     device_preset_idx: usize,
-    smbios_preset_idx: usize,
     custom_device_model: Option<String>,
-    custom_smbios_model: Option<String>,
 
     input_mode: Option<InputMode>,
     confirm_mode: Option<ConfirmMode>,
@@ -301,9 +268,7 @@ impl App {
             uninstall_idx: 0,
             log_scroll: 0,
             device_preset_idx: 0,
-            smbios_preset_idx: 0,
             custom_device_model: None,
-            custom_smbios_model: None,
             input_mode: None,
             confirm_mode: None,
             status_lines: Vec::new(),
@@ -399,26 +364,13 @@ impl App {
             KeyCode::Enter => {
                 if let Some(input) = self.input_mode.take() {
                     let model = input.buffer.trim().to_string();
-                    if !model.is_empty() {
-                        match input.target {
-                            PatchRow::Device => {
-                                self.custom_device_model = Some(model.clone());
-                                self.log.push(
-                                    i18n::tr("tui.log.model.set", self.lang)
-                                        .replace("{model}", &model),
-                                );
-                                self.log_scroll = self.log.len().saturating_sub(1);
-                            }
-                            PatchRow::Smbios => {
-                                self.custom_smbios_model = Some(model.clone());
-                                self.log.push(
-                                    i18n::tr("tui.log.smbios.set", self.lang)
-                                        .replace("{model}", &model),
-                                );
-                                self.log_scroll = self.log.len().saturating_sub(1);
-                            }
-                            _ => {}
-                        }
+                    if !model.is_empty() && input.target == PatchRow::Device {
+                        self.custom_device_model = Some(model.clone());
+                        self.log.push(
+                            i18n::tr("tui.log.model.set", self.lang)
+                                .replace("{model}", &model),
+                        );
+                        self.log_scroll = self.log.len().saturating_sub(1);
                     }
                 }
             }
@@ -489,7 +441,7 @@ impl App {
             KeyCode::Char('m') | KeyCode::Char('M') => self.cycle_preset(),
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 let patch = PatchRow::all()[self.patch_idx];
-                if matches!(patch, PatchRow::Device | PatchRow::Smbios) {
+                if matches!(patch, PatchRow::Device) {
                     self.input_mode = Some(InputMode {
                         target: patch,
                         buffer: String::new(),
@@ -572,40 +524,23 @@ impl App {
     fn current_device_model(&self) -> &str {
         self.custom_device_model
             .as_deref()
-            .unwrap_or(PRESETS[self.device_preset_idx].code)
-    }
-
-    fn current_smbios_model(&self) -> &str {
-        self.custom_smbios_model
-            .as_deref()
-            .unwrap_or(PRESETS[self.smbios_preset_idx].code)
+            .unwrap_or_else(|| devicelist::devices()[self.device_preset_idx].code.as_str())
     }
 
     fn cycle_preset(&mut self) {
         let patch = PatchRow::all()[self.patch_idx];
         let lang = self.lang;
-        match patch {
-            PatchRow::Device => {
-                self.custom_device_model = None;
-                self.device_preset_idx = (self.device_preset_idx + 1) % PRESETS.len();
-                self.log.push(
-                    i18n::tr("tui.log.model.switch", lang)
-                        .replace("{code}", PRESETS[self.device_preset_idx].code)
-                        .replace("{name}", PRESETS[self.device_preset_idx].name),
-                );
-                self.log_scroll = self.log.len().saturating_sub(1);
-            }
-            PatchRow::Smbios => {
-                self.custom_smbios_model = None;
-                self.smbios_preset_idx = (self.smbios_preset_idx + 1) % PRESETS.len();
-                self.log.push(
-                    i18n::tr("tui.log.smbios.switch", lang)
-                        .replace("{code}", PRESETS[self.smbios_preset_idx].code)
-                        .replace("{name}", PRESETS[self.smbios_preset_idx].name),
-                );
-                self.log_scroll = self.log.len().saturating_sub(1);
-            }
-            _ => {}
+        if patch == PatchRow::Device {
+            self.custom_device_model = None;
+            let devices = devicelist::devices();
+            self.device_preset_idx = (self.device_preset_idx + 1) % devices.len();
+            let device = &devices[self.device_preset_idx];
+            self.log.push(
+                i18n::tr("tui.log.model.switch", lang)
+                    .replace("{code}", &device.code)
+                    .replace("{name}", &device.name),
+            );
+            self.log_scroll = self.log.len().saturating_sub(1);
         }
     }
 
@@ -680,7 +615,6 @@ impl App {
         if let Some(ref input) = self.input_mode {
             let target_label = match input.target {
                 PatchRow::Device => i18n::tr("tui.input.device", self.lang),
-                PatchRow::Smbios => i18n::tr("tui.input.smbios", self.lang),
                 _ => "",
             };
             let title =
@@ -791,7 +725,7 @@ impl App {
             match patch {
                 PatchRow::Device => {
                     let model = self.current_device_model();
-                    let preset = &PRESETS[self.device_preset_idx];
+                    let preset = &devicelist::devices()[self.device_preset_idx];
                     let c = if self.custom_device_model.is_some() {
                         " (自定义)"
                     } else {
@@ -801,22 +735,6 @@ impl App {
                         Span::styled(
                             format!("  机型: {model} · {}{c}", preset.name),
                             Style::default().fg(theme::CYAN),
-                        ),
-                        Span::styled("  [M]切换  [C]自定义", theme::item_hint()),
-                    ])]
-                }
-                PatchRow::Smbios => {
-                    let model = self.current_smbios_model();
-                    let preset = &PRESETS[self.smbios_preset_idx];
-                    let c = if self.custom_smbios_model.is_some() {
-                        " (自定义)"
-                    } else {
-                        ""
-                    };
-                    vec![Line::from(vec![
-                        Span::styled(
-                            format!("  机型: {model} · {}{c}", preset.name),
-                            Style::default().fg(theme::PURPLE),
                         ),
                         Span::styled("  [M]切换  [C]自定义", theme::item_hint()),
                     ])]

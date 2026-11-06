@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "mipcmanager_patch"
-version = "2.0.1"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "clap",

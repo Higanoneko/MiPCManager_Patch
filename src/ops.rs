@@ -4,7 +4,7 @@
 //! 每个高层函数返回 `Vec<String>` 日志行，CLI 直接打印、GUI 追加到日志区，二者共用同一套逻辑。
 
 use crate::{
-    experimental::smbios_spoof,
+    devicelist,
     install::{self, pc_manager_installer, xiaoai_installer},
     patches::{ai, audio, camera, camera::dotnet, device, hotkey, locale},
     uninstall,
@@ -46,7 +46,6 @@ pub const PROC_CAMERA: &[&str] = &["XiaomiPcManager"];
 pub const PROC_HOTKEY: &[&str] = &["XiaomiPcManager", "XiaomiPcHost"];
 pub const PROC_AUDIO: &[&str] = &["MiPCAudio", "MiPlayCastService", "MAFSvr", "MASFvr"];
 pub const PROC_DEVICE: &[&str] = &["XiaomiPcManager"];
-pub const PROC_SMBIOS: &[&str] = &["micont_service"];
 pub const PROC_XIAOAI: &[&str] = &["XiaoaiAgent"];
 
 const RESTART_HINT: &str = "提示：补丁已完成，请手动重新启动小米电脑管家使其生效。";
@@ -113,10 +112,10 @@ pub fn status_lines() -> Vec<String> {
         match install::latest_version_dir(&root) {
             Ok(version) => {
                 out.push(format!("最新版本目录：{}", version.display()));
-                let runtime_dir = install::runtime_native_dir(&version);
-                out.push(format!("运行时目录：{}", runtime_dir.display()));
-                push_file_status(&runtime_dir.join(locale::TARGET_DLL), &mut out);
-                out.push("  摄像头、音频流转和设备伪装：当前版本不可用".to_string());
+                let component = install::component_dir(&version);
+                out.push(format!("组件目录：{}", component.display()));
+                push_file_status(&component.join(locale::TARGET_DLL), &mut out);
+                out.push("  其他功能：当前产品仅支持地区伪装".to_string());
             }
             Err(error) => out.push(format!("（无法确定版本目录：{error}）")),
         }
@@ -148,10 +147,27 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
     out.push(format!("安装根目录：{}", root.display()));
     match install::latest_version_dir(root) {
         Ok(version) => {
+            // 6.0 起组件迁入 <版本目录>\MiSmartShare；msimg32.dll 仍需与
+            // XiaomiPCManager.exe 同目录，因此设备伪装始终检查版本目录本身。
+            let is_v6 = install::is_v6_or_newer(&version);
+            let component = install::component_dir(&version);
             out.push(format!("最新版本目录：{}", version.display()));
-            push_file_status(&version.join(locale::TARGET_DLL), out);
-            push_file_status(&version.join(camera::TARGET_DLL), out);
-            let hotkey_path = version.join(hotkey::TARGET_RELATIVE_PATH);
+            out.push(format!(
+                "组件目录：{}（{}）",
+                component.display(),
+                if is_v6 {
+                    "6.0+ MiSmartShare 布局"
+                } else {
+                    "旧版布局"
+                }
+            ));
+            push_file_status(&component.join(locale::TARGET_DLL), out);
+            if is_v6 {
+                out.push("  摄像头弹窗补丁：6.0 及以上版本不再需要".to_string());
+            } else {
+                push_file_status(&component.join(camera::TARGET_DLL), out);
+            }
+            let hotkey_path = component.join(hotkey::TARGET_RELATIVE_PATH);
             let hotkey_state = if hotkey_path.exists() {
                 hotkey::current_state(&hotkey_path)
                     .map(|state| state.label().to_string())
@@ -161,26 +177,19 @@ fn push_full_installation_status(root: &Path, out: &mut Vec<String>) {
             };
             out.push(format!("  鼠标快捷键: {hotkey_state}"));
             out.push("  -- 音频流转广播模式 --".to_string());
-            for (file, state) in audio::current_state(&version) {
+            for (file, state) in audio::current_state(&component) {
                 out.push(format!("     {file}: {state}"));
             }
             out.push(format!(
                 "     Wi-Fi 本地路由: {}",
-                audio::wifi_route_state(&version)
+                audio::wifi_route_state(&component)
             ));
-            out.push("  -- 设备伪装 --".to_string());
+            out.push("  -- 设备伪装（版本目录） --".to_string());
             let (dll_ok, model) = device::current_state(&version);
             out.push(format!(
                 "     msimg32.dll: {} | 注册表机型: {}",
                 if dll_ok { "已就位" } else { "未就位" },
                 model.unwrap_or_else(|| "未设置".to_string())
-            ));
-            out.push("  -- [实验性] Lyra 特殊适配 --".to_string());
-            let smbios_dll = version.join(smbios_spoof::TARGET_DLL);
-            let smbios_ok = smbios_dll.exists() && smbios_spoof::is_patched(&smbios_dll);
-            out.push(format!(
-                "     SMBIOS 设备身份: {}",
-                if smbios_ok { "已就位" } else { "未就位" }
             ));
         }
         Err(error) => out.push(format!("（无法确定版本目录：{error}）")),
@@ -293,7 +302,23 @@ pub fn revert_locale(
 
 // ===================== 摄像头弹窗 =====================
 
+/// 摄像头弹窗 Hook 是否仍适用：6.0 及以上版本不再需要。
+pub fn camera_hook_available() -> bool {
+    install::find_install_root()
+        .and_then(|root| install::latest_version_dir(&root).ok())
+        .is_none_or(|version| !install::is_v6_or_newer(&version))
+}
+
+/// 自动探测到 6.0+ 时拒绝执行 Hook；显式 `--dll` 仍允许用户自行指定目标文件。
+fn ensure_camera_hook_supported(explicit: Option<&Path>) -> Result<()> {
+    if explicit.is_some() || camera_hook_available() {
+        return Ok(());
+    }
+    bail!("当前小米电脑管家为 6.0 及以上版本，不再需要摄像头弹窗补丁")
+}
+
 pub fn apply_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    ensure_camera_hook_supported(dll.as_deref())?;
     let path = resolve_full_feature_dll(dll, camera::TARGET_DLL)?;
     let mut log = Vec::new();
     run_patch(
@@ -320,6 +345,7 @@ pub fn apply_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> 
 }
 
 pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    ensure_camera_hook_supported(dll.as_deref())?;
     let path = resolve_full_feature_dll(dll, camera::TARGET_DLL)?;
     let mut log = Vec::new();
     run_patch(
@@ -339,7 +365,7 @@ pub fn revert_camera(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
 // ===================== 鼠标快捷键 =====================
 
 pub fn apply_mouse_hotkeys(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let dir = resolve_full_version_dir_or(dir)?;
+    let dir = resolve_component_dir_or(dir)?;
     let path = dir.join(hotkey::TARGET_RELATIVE_PATH);
     if !path.is_file() {
         bail!("在 {} 中未找到快捷键设置脚本", path.display());
@@ -370,7 +396,7 @@ pub fn apply_mouse_hotkeys(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<St
 }
 
 pub fn revert_mouse_hotkeys(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let dir = resolve_full_version_dir_or(dir)?;
+    let dir = resolve_component_dir_or(dir)?;
     let path = dir.join(hotkey::TARGET_RELATIVE_PATH);
     if !path.is_file() {
         bail!("在 {} 中未找到快捷键设置脚本", path.display());
@@ -415,7 +441,7 @@ pub fn apply_audio_with_options(
     no_kill: bool,
     no_wifi_local_route: bool,
 ) -> Result<Vec<String>> {
-    let dir = resolve_full_version_dir_or(dir)?;
+    let dir = resolve_component_dir_or(dir)?;
     let mut log = Vec::new();
     let patch_mode: audio::BroadcastMode = mode.into();
     run_patch(
@@ -467,7 +493,7 @@ pub fn apply_audio_with_options(
 }
 
 pub fn revert_audio(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let dir = resolve_full_version_dir_or(dir)?;
+    let dir = resolve_component_dir_or(dir)?;
     let mut log = Vec::new();
     run_patch(
         &PatchOp {
@@ -490,6 +516,8 @@ pub fn revert_audio(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> 
 // ===================== 设备伪装 =====================
 
 pub fn apply_device(model: &str, dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
+    // msimg32.dll 代理由主程序加载，必须与 XiaomiPCManager.exe 同在版本目录，
+    // 不能随 6.0 的组件一起放进 MiSmartShare。
     let dir = resolve_full_version_dir_or(dir)?;
     let mut log = Vec::new();
     run_patch(
@@ -572,55 +600,6 @@ pub fn revert_xiaoai(dir: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>>
         |_| vec![format!("✓ 已还原超级小爱补丁：{}", dir.display())],
     )?;
     log.push(XIAOAI_RESTART_HINT.to_string());
-    Ok(log)
-}
-
-// ===================== SMBIOS 伪装 =====================
-
-pub fn apply_smbios(
-    model: Option<&str>,
-    dll: Option<PathBuf>,
-    no_kill: bool,
-) -> Result<Vec<String>> {
-    let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
-    let mut log = Vec::new();
-    run_patch(
-        &PatchOp {
-            procs: PROC_SMBIOS,
-            required: true,
-            no_kill,
-        },
-        &mut log,
-        || smbios_spoof::apply(&path, model),
-        |outcome| {
-            vec![match outcome {
-                smbios_spoof::PatchOutcome::Patched => {
-                    format!("✓ SMBIOS 设备身份补丁已应用：{}", path.display())
-                }
-                smbios_spoof::PatchOutcome::AlreadyPatched => {
-                    format!("• SMBIOS 已是补丁状态（跳过）：{}", path.display())
-                }
-            }]
-        },
-    )?;
-    log.push(RESTART_HINT.to_string());
-    Ok(log)
-}
-
-pub fn revert_smbios(dll: Option<PathBuf>, no_kill: bool) -> Result<Vec<String>> {
-    let path = resolve_full_feature_dll(dll, smbios_spoof::TARGET_DLL)?;
-    let mut log = Vec::new();
-    run_patch(
-        &PatchOp {
-            procs: PROC_SMBIOS,
-            required: true,
-            no_kill,
-        },
-        &mut log,
-        || smbios_spoof::revert(&path),
-        |_| vec![format!("✓ 已还原 SMBIOS 设备身份补丁：{}", path.display())],
-    )?;
-    log.push(RESTART_HINT.to_string());
     Ok(log)
 }
 
@@ -718,6 +697,8 @@ pub fn install_local_xiaoai() -> Result<Vec<String>> {
 }
 
 /// 根据所选安装包安装小米电脑管家 / 小米互联：自动识别产品、校验共存、启动安装。
+///
+/// 安装后的设备伪装由独立的 `device apply` 负责，这里不再复制 `msimg32.dll`。
 pub fn install_from_path(installer: &Path) -> Result<Vec<String>> {
     let kind = pc_manager_installer::classify_installer(installer);
     let manager_root = install::find_install_root();
@@ -727,9 +708,9 @@ pub fn install_from_path(installer: &Path) -> Result<Vec<String>> {
     Ok(vec![
         format!("✓ 已启动{}安装包：{}", kind.label(), installer.display()),
         format!(
-            "  已释放 {}、写入 SpoofDevice={}，注入并旁路 WinVersionMatch(需Win11) + MatchProduct*| PID: {pid}",
+            "  已在安装包同目录释放 {}、写入 SpoofDevice={}，注入并旁路 WinVersionMatch(需Win11) + MatchProduct*| PID: {pid}",
             device::PROXY_DLL_NAME,
-            device::DEFAULT_MODEL
+            devicelist::default_code()
         ),
     ])
 }
@@ -809,14 +790,16 @@ pub fn resolve_locale_dll_from_roots(
     for root in [manager_root, continuity_root].into_iter().flatten() {
         match install::latest_version_dir(root) {
             Ok(version) => {
-                // HyperConnect 2.0 的 DLL 位于 resources\native-interconnect\win32 子目录。
-                let dll = install::runtime_native_dir(&version).join(locale::TARGET_DLL);
+                // 6.0 起组件位于 <版本目录>\MiSmartShare；
+                // HyperConnect 2.0 的 DLL 位于 resources\native-interconnect\win32。
+                let component = install::component_dir(&version);
+                let dll = component.join(locale::TARGET_DLL);
                 if dll.exists() {
                     return Ok(dll);
                 }
                 errors.push(format!(
                     "在 {} 中未找到 {}",
-                    version.display(),
+                    component.display(),
                     locale::TARGET_DLL
                 ));
             }
@@ -840,9 +823,10 @@ pub fn resolve_full_feature_dll(explicit: Option<PathBuf>, filename: &str) -> Re
         return Ok(path);
     }
     let version = resolve_full_version_dir()?;
-    let path = version.join(filename);
+    let component = install::component_dir(&version);
+    let path = component.join(filename);
     if !path.exists() {
-        bail!("在 {} 中未找到 {filename}", version.display());
+        bail!("在 {} 中未找到 {filename}", component.display());
     }
     Ok(path)
 }
@@ -880,6 +864,23 @@ pub fn resolve_full_version_dir_or(explicit: Option<PathBuf>) -> Result<PathBuf>
         Some(d) => bail!("指定的版本目录不存在：{}", d.display()),
         None => resolve_full_version_dir(),
     }
+}
+
+/// 解析功能组件目录：显式 `--dir` 优先，否则自动探测完整版电脑管家。
+///
+/// 6.0 及以上版本按版本目录名映射到 `<版本目录>\MiSmartShare`，旧版仍是版本目录自身。
+/// 显式参数既可以是版本目录，也可以已经是 `MiSmartShare` 组件目录。
+pub fn resolve_component_dir_or(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let version = resolve_full_version_dir_or(explicit)?;
+    let component = install::component_dir(&version);
+    if !component.is_dir() {
+        bail!(
+            "组件目录不存在：{}（6.0 及以上版本的组件位于 <版本目录>\\{}）",
+            component.display(),
+            install::MISMART_SHARE_REL
+        );
+    }
+    Ok(component)
 }
 
 /// 解析超级小爱最新版本目录。
@@ -1093,4 +1094,48 @@ mod tests {
             .to_string();
         assert!(error.contains("已安装小米电脑管家"));
     }
+
+    #[test]
+    fn v6_patches_use_mismartshare_component_dir() {
+        let root = fixture_root("v6_component");
+        let version = root.join("6.0.2.19");
+        let component = version.join(install::MISMART_SHARE_REL);
+        fs::create_dir_all(&component).unwrap();
+        fs::write(component.join(locale::TARGET_DLL), b"fixture").unwrap();
+
+        let resolved = resolve_locale_dll_from_roots(Some(&root), None).unwrap();
+        assert_eq!(resolved, component.join(locale::TARGET_DLL));
+        let dir = resolve_component_dir_or(Some(version.clone())).unwrap();
+        assert_eq!(dir, component);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_patches_stay_in_version_dir() {
+        let root = fixture_root("legacy_component");
+        let version = root.join("5.8.0.95");
+        fs::create_dir_all(&version).unwrap();
+        fs::write(version.join(locale::TARGET_DLL), b"fixture").unwrap();
+
+        let resolved = resolve_locale_dll_from_roots(Some(&root), None).unwrap();
+        assert_eq!(resolved, version.join(locale::TARGET_DLL));
+        let dir = resolve_component_dir_or(Some(version.clone())).unwrap();
+        assert_eq!(dir, version);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_component_dir_is_accepted() {
+        let root = fixture_root("explicit_component");
+        let component = root.join("6.0.2.19").join(install::MISMART_SHARE_REL);
+        fs::create_dir_all(&component).unwrap();
+
+        let dir = resolve_component_dir_or(Some(component.clone())).unwrap();
+        assert_eq!(dir, component);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }

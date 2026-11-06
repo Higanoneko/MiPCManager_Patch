@@ -11,11 +11,11 @@
 | 功能 | 说明 |
 |---|---|
 | 🗺️ **地区伪装** | 让小米电脑管家读取指定的地区值（默认 `CN`），不修改系统真实地区 |
-| 📷 **抑制摄像头误报弹窗** | 屏蔽「摄像头暂不可用，点击确定打开设备管理器」这类本机摄像头被误判禁用的弹窗 |
+| 📷 **抑制摄像头误报弹窗** | 屏蔽「摄像头暂不可用，点击确定打开设备管理器」这类本机摄像头被误判禁用的弹窗（仅 6.0 以下版本；6.0 起不再需要） |
 | 🖱️ **鼠标快捷键** | 允许把鼠标中键、右键和两个侧键设为小米电脑管家快捷键 |
 | 🔊 **音频流转增强** | 在无线 WiFi 与有线 LAN 之间切换音频流转的网络介质 |
 | 💻 **设备伪装** | 伪装为指定机型，解锁机型相关功能 |
-| 📦 **安装小米电脑管家** | 自动查找或下载安装包，释放必要的补丁文件后启动安装 |
+| 📦 **安装小米电脑管家** | 自动查找或下载安装包，释放必要的补丁文件后启动安装；安装后如需设备伪装，单独执行「设备伪装」即可 |
 | 📦 **安装超级小爱** | 辅助运行安装包，安装完成后向实际版本目录部署专用 `userenv.dll`（不限制版本） |
 | 📊 **状态查看** | 检查当前安装位置、各补丁状态 |
 
@@ -50,7 +50,7 @@ MiPCM_CLI.exe status
 MiPCM_CLI.exe locale apply
 MiPCM_CLI.exe locale revert
 
-# 抑制摄像头弹窗
+# 抑制摄像头弹窗（仅 6.0 以下版本）
 MiPCM_CLI.exe camera apply
 MiPCM_CLI.exe camera revert
 
@@ -64,7 +64,7 @@ MiPCM_CLI.exe audio apply --mode wifi    # 无线模式
 MiPCM_CLI.exe audio revert
 
 # 设备伪装
-MiPCM_CLI.exe device apply --model TM2425
+MiPCM_CLI.exe device apply --model TM2425   # 代号见 src/devicelist/devicelist.yaml
 MiPCM_CLI.exe device revert
 
 # 安装小米电脑管家
@@ -104,6 +104,12 @@ MiPCM_CLI.exe xiaoai revert
 </details>
 
 <details>
+<summary>6.0 及以上版本的安装目录有什么不同？</summary>
+
+工具截取版本目录名（如 `6.0.2.19`）并按数值判断版本。6.0 起功能组件位于 `<版本目录>\MiSmartShare`，工具会自动在该目录下加载 / Patch 补丁；`msimg32.dll` 仍与 `XiaomiPCManager.exe` 同在版本目录（该目录还含 `Uninstall.exe`）。摄像头弹窗补丁在 6.0 及以上版本不再需要，界面会自动隐藏。
+</details>
+
+<details>
 <summary>只安装了「小米互联 / 互联互通」能用吗？</summary>
 
 「小米互联 / 互联互通」(PcContinuity / HyperConnect 2.0) 仅支持**地区伪装**功能。摄像头弹窗、鼠标快捷键、音频流转、设备伪装等功能需要完整版「小米电脑管家」(XiaomiPCManager)。
@@ -114,6 +120,17 @@ MiPCM_CLI.exe xiaoai revert
 
 工具会自动关闭对应进程并重试一次。如果仍然失败，请手动关闭小米电脑管家相关进程后重试。
 </details>
+
+## 维护机型列表
+
+机型代号与名称统一放在 [`src/devicelist/devicelist.yaml`](src/devicelist/devicelist.yaml)：
+
+```yaml
+device_list:
+  TM2425: 'Redmi Book Pro 14 (2026)'
+```
+
+在 `device_list` 下追加一行 `  CODE: '机型名'` 并重新编译，CLI 默认机型、GUI / TUI 预置列表会自动同步；列表首项为默认机型。`--model` 仍可传入任意自定义代号。
 
 ## 技术说明
 

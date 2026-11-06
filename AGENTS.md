@@ -23,6 +23,10 @@ src/
 ├── ops.rs                    # 高层操作：PatchOp 组合子编排，面向前端
 ├── elevate.rs                # 管理员提权（release manifest + 运行时兜底）
 │
+├── devicelist/               # 机型代号表（yaml 数据 + 解析模块，纯数据层）
+│   ├── mod.rs
+│   └── devicelist.yaml
+│
 ├── infra/                    # 通用基础设施（本项目最底层，零业务语义）
 │   ├── mod.rs
 │   ├── pe.rs                 # PE32+ 解析（读取节表、RVA↔偏移、追加节、校验和）
@@ -66,9 +70,12 @@ ui (gui / tui)
         └→ patches  ─┐
           └→ install ─┼→ infra
             └→ infra ─┘
+
+任意层 → devicelist（只读机型表，纯数据）
 ```
 
 - `infra` 不依赖任何业务模块
+- `devicelist` 不依赖任何业务模块；`patches` / `ops` / `ui` 可直接读取机型表
 - `patches` 依赖 `infra` + `install`
 - `ops` 依赖 `patches` + `install`
 - `ui` 依赖 `ops`（及必要的 `patches` 常量）
@@ -232,6 +239,7 @@ path = "src/ui/gui/main.rs"
 |---|---|---|
 | `assets/MiPCManager.ico` | GUI: `ico` crate 解析 | `ui/gui/main.rs` |
 | `patches/dlls/msimg32.dll` | `include_bytes!` | `patches/device.rs` |
+| `src/devicelist/devicelist.yaml` | `include_str!` | `devicelist/mod.rs` |
 | `resources/*.manifest` | `embed-resource` build.rs | 所有二进制产物 |
 
 ---

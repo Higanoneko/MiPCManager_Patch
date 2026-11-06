@@ -76,8 +76,6 @@ tr_table!(tr_zh, {
     "btn.cancel" => "取消",
     "btn.wifi" => "WiFi",
     "btn.lan" => "LAN",
-    "btn.diagnose" => "诊断",
-    "btn.fix" => "修复",
     "btn.select" => "选择",
     "btn.start-install" => "安装",
     "btn.confirm" => "确认卸载",
@@ -111,28 +109,18 @@ tr_table!(tr_zh, {
     "patch.audio" => "音频流转",
     "patch.device" => "设备伪装",
     "patch.xiaoai" => "超级小爱",
-    "patch.smbios" => "Lyra SMBIOS (实验性)",
-    "patch.dual-nic" => "Lyra 双网卡 (实验性)",
     "patch.locale.detail" => "地区伪装 (micont_rtm.dll)",
     "patch.camera.detail" => "摄像头弹窗抑制 (PcControlCenter.dll)",
     "patch.hotkey.detail" => "鼠标快捷键（含两个侧键）",
     "patch.audio.detail" => "音频流转广播模式",
     "patch.device.detail" => "设备伪装 (msimg32.dll)",
     "patch.xiaoai.detail" => "超级小爱 (userenv.dll)",
-    "patch.smbios.detail" => "[实验性] SMBIOS 设备身份",
-    "patch.dualnic.detail" => "Lyra 双网卡音频修复",
     "patch.locale.desc" => "伪装地区为中国大陆，解锁区域功能",
     "patch.camera.desc" => "抑制摄像头状态确认弹窗",
     "patch.hotkey.desc" => "允许将中键、右键及两个鼠标侧键设为快捷键",
     "patch.audio.desc" => "切换广播模式 / 修复双网卡音频断流",
     "patch.device.desc" => "释放 msimg32.dll 代理 + 写入机型注册表",
     "patch.xiaoai.desc" => "部署安装与运行所需的专用 userenv.dll；完成后需重启电脑",
-    "patch.smbios.desc" => "SMBIOS 设备身份伪装（妙播 / Lyra 适配）",
-    "patch.dualnic.desc" => "诊断并自动对齐 Wi-Fi 路由与广播模式",
-
-    // ── 双网卡按钮 ──
-    "btn.dualnic.diagnose" => "诊断",
-    "btn.dualnic.fix" => "修复",
 
     // ── CLI 命令 ──
     "cli.about" => "小米电脑管家功能增强补丁工具",
@@ -141,18 +129,14 @@ tr_table!(tr_zh, {
     "cli.cmd.camera" => "抑制「请确认摄像头状态」弹窗 (PcControlCenter.dll) ",
     "cli.cmd.audio" => "MiPCAudio 音频流转广播模式 (无线/有线, 统一身份并修复双网卡媒体路由) ",
     "cli.cmd.device" => "设备伪装 (释放 msimg32.dll + 写入机型注册表) ",
-    "cli.cmd.smbios" => "[实验性] SMBIOS 设备身份伪装 — 妙播 / Lyra 特殊适配 (micont_rtm.dll IAT Hook) ",
     "cli.cmd.install" => "安装小米电脑管家 / 小米互联 (自动识别安装包所属产品) ",
     "cli.cmd.uninstall" => "卸载 MiDrop Ext MSIX 包 或 小米电脑管家 / 小米互联",
     "cli.cmd.apply" => "应用补丁",
     "cli.cmd.revert" => "还原补丁",
     "cli.cmd.audio.apply" => "切换广播模式",
     "cli.cmd.audio.revert" => "还原音频流转补丁",
-    "cli.cmd.audio.experimental" => "[实验性] 双网卡同网段音频修复: 诊断并自动对齐 Wi-Fi 路由与广播模式",
     "cli.cmd.device.apply" => "应用设备伪装",
     "cli.cmd.device.revert" => "还原设备伪装",
-    "cli.cmd.smbios.apply" => "应用 SMBIOS 设备身份伪装",
-    "cli.cmd.smbios.revert" => "还原 SMBIOS 设备身份伪装",
     "cli.cmd.msix" => "卸载 MiDrop Ext MSIX 包 (完成后重启资源管理器) ",
     "cli.cmd.product" => "完整卸载小米电脑管家 / 小米互联 (主程序 + 子产品 + 服务 + 文件清理, 不可逆) ",
 
@@ -164,8 +148,7 @@ tr_table!(tr_zh, {
     "cli.arg.mode" => "广播介质: wifi (无线, 默认) 或 lan  (有线) ",
     "cli.arg.dir" => "指定版本目录 (默认自动探测) ",
     "cli.arg.no_wifi_route" => "不自动管理 Wi-Fi 本地子网优先路由 (无线模式下用于修复双网卡同网段断流) ",
-    "cli.arg.dry_run" => "仅诊断, 不执行修复",
-    "cli.arg.model" => "机型代号 (默认 TM2425) ",
+    "cli.arg.model" => "机型代号 (默认: 机型表首项) ",
     "cli.arg.installer" => "显式指定 .exe 安装包",
     "cli.arg.url" => "从 HTTP(S) 地址下载安装包",
 
@@ -217,10 +200,6 @@ tr_table!(tr_zh, {
     "gui.op.audio.wifi" => "音频·WiFi",
     "gui.op.audio.lan" => "音频·LAN",
     "gui.op.audio.revert" => "音频·还原",
-    "gui.op.dualnic.diagnose" => "双网卡·诊断",
-    "gui.op.dualnic.fix" => "双网卡·修复",
-    "gui.op.smbios.apply" => "SMBIOS({model})",
-    "gui.op.smbios.revert" => "SMBIOS·还原",
     "gui.op.uninstall.msix" => "卸载MSIX",
     "gui.op.uninstall.product" => "卸载产品",
     "gui.op.install" => "安装({path})",
@@ -298,7 +277,6 @@ tr_table!(tr_zh, {
 
     // ── TUI 输入对话框 ──
     "tui.input.device" => "设备伪装",
-    "tui.input.smbios" => "SMBIOS 伪装",
     "tui.input.title" => " 自定义机型 — {target_label} ",
 
     // ── TUI 状态 ──
@@ -307,9 +285,7 @@ tr_table!(tr_zh, {
 
     // ── TUI 机型日志 ──
     "tui.log.model.set" => "已设置机型: {model}",
-    "tui.log.smbios.set" => "已设置SMBIOS机型: {model}",
     "tui.log.model.switch" => "📱 设备伪装机型切换为: {code} [{name}]",
-    "tui.log.smbios.switch" => "📱 SMBIOS 机型切换为: {code} [{name}]",
     "tui.log.uninstall.fetch.error" => "✗ 获取卸载信息失败: {error}",
 
     // ── TUI 操作标签 ──
@@ -327,10 +303,6 @@ tr_table!(tr_zh, {
     "tui.op.xiaoai.apply" => "超级小爱 · 应用",
     "tui.op.xiaoai.revert" => "超级小爱 · 还原",
     "tui.op.xiaoai.install" => "超级小爱 · 安装并注入",
-    "tui.op.smbios.apply" => "SMBIOS · 应用({model})",
-    "tui.op.smbios.revert" => "SMBIOS · 还原",
-    "tui.op.dualnic.diagnose" => "双网卡诊断",
-    "tui.op.dualnic.fix" => "双网卡修复",
     "tui.op.uninstall.msix" => "卸载 MiDrop Ext (MSIX)",
     "tui.op.uninstall.product" => "卸载小米电脑管家 / 小米互联",
 
@@ -378,8 +350,6 @@ tr_table!(tr_en, {
     "btn.cancel" => "Cancel",
     "btn.wifi" => "WiFi",
     "btn.lan" => "LAN",
-    "btn.diagnose" => "Diagnose",
-    "btn.fix" => "Fix",
     "btn.select" => "Select",
     "btn.start-install" => "Start Install",
     "btn.confirm" => "Confirm Uninstall",
@@ -413,28 +383,18 @@ tr_table!(tr_en, {
     "patch.audio" => "Audio Stream",
     "patch.device" => "Device Spoof",
     "patch.xiaoai" => "Super XiaoAI",
-    "patch.smbios" => "Lyra SMBIOS (Experimental)",
-    "patch.dual-nic" => "Lyra Dual NIC (Experimental)",
     "patch.locale.detail" => "Locale Spoof (micont_rtm.dll)",
     "patch.camera.detail" => "Camera Toast Suppression (PcControlCenter.dll)",
     "patch.hotkey.detail" => "Mouse Hotkeys (including two side buttons)",
     "patch.audio.detail" => "Audio Stream Broadcast Mode",
     "patch.device.detail" => "Device Spoof (msimg32.dll)",
     "patch.xiaoai.detail" => "Super XiaoAI (userenv.dll)",
-    "patch.smbios.detail" => "[Experimental] SMBIOS Device Identity",
-    "patch.dualnic.detail" => "[Experimental] Dual NIC Audio Fix",
     "patch.locale.desc" => "Spoof region to China Mainland, unlock regional features",
     "patch.camera.desc" => "Suppress camera status confirmation toast",
     "patch.hotkey.desc" => "Use middle, right, and both mouse side buttons as hotkeys",
     "patch.audio.desc" => "Switch broadcast mode / fix dual-NIC audio dropout",
     "patch.device.desc" => "Deploy msimg32.dll proxy + write registry model",
     "patch.xiaoai.desc" => "Deploy the dedicated userenv.dll required for install and runtime; reboot afterwards",
-    "patch.smbios.desc" => "SMBIOS device identity spoof (Lyra adaptation)",
-    "patch.dualnic.desc" => "Diagnose and auto-align Wi-Fi routing with broadcast mode",
-
-    // ── 双网卡按钮 ──
-    "btn.dualnic.diagnose" => "Diagnose",
-    "btn.dualnic.fix" => "Fix",
 
     // ── CLI 命令 ──
     "cli.about" => "MiPCManager Enhancement Patch Tool",
@@ -443,18 +403,14 @@ tr_table!(tr_en, {
     "cli.cmd.camera" => "Suppress camera toast (PcControlCenter.dll)",
     "cli.cmd.audio" => "MiPCAudio broadcast mode (wireless/wired, unified identity, dual-NIC fix)",
     "cli.cmd.device" => "Device spoof (deploy msimg32.dll + registry model)",
-    "cli.cmd.smbios" => "[Experimental] SMBIOS device identity — Lyra special adaptation (micont_rtm.dll IAT Hook)",
     "cli.cmd.install" => "Install MiPCManager / MiContinuity (auto-detect product type)",
     "cli.cmd.uninstall" => "Uninstall MiDrop Ext MSIX or MiPCManager / MiContinuity",
     "cli.cmd.apply" => "Apply patch",
     "cli.cmd.revert" => "Revert patch",
     "cli.cmd.audio.apply" => "Switch broadcast mode",
     "cli.cmd.audio.revert" => "Revert audio stream patch",
-    "cli.cmd.audio.experimental" => "[Experimental] Dual-NIC same-subnet audio fix: diagnose and align Wi-Fi routing with broadcast mode",
     "cli.cmd.device.apply" => "Apply device spoof",
     "cli.cmd.device.revert" => "Revert device spoof",
-    "cli.cmd.smbios.apply" => "Apply SMBIOS device identity",
-    "cli.cmd.smbios.revert" => "Revert SMBIOS device identity",
     "cli.cmd.msix" => "Uninstall MiDrop Ext MSIX package (restart Explorer afterwards)",
     "cli.cmd.product" => "Complete uninstall of MiPCManager / MiContinuity (main + sub-products + services + cleanup, irreversible)",
 
@@ -466,8 +422,7 @@ tr_table!(tr_en, {
     "cli.arg.mode" => "Broadcast medium: wifi (wireless, default) or lan (wired)",
     "cli.arg.dir" => "Specify version directory (auto-detect by default)",
     "cli.arg.no_wifi_route" => "Don't auto-manage Wi-Fi local-subnet route (used in wireless mode for dual-NIC same-subnet fix)",
-    "cli.arg.dry_run" => "Diagnose only, don't execute fix",
-    "cli.arg.model" => "Model code (default TM2425)",
+    "cli.arg.model" => "Model code (default: first entry in devicelist.yaml)",
     "cli.arg.installer" => "Explicitly specify .exe installer",
     "cli.arg.url" => "Download from HTTP(S) URL",
 
@@ -519,10 +474,6 @@ tr_table!(tr_en, {
     "gui.op.audio.wifi" => "Audio · WiFi",
     "gui.op.audio.lan" => "Audio · LAN",
     "gui.op.audio.revert" => "Audio · Revert",
-    "gui.op.dualnic.diagnose" => "Dual NIC · Diagnose",
-    "gui.op.dualnic.fix" => "Dual NIC · Fix",
-    "gui.op.smbios.apply" => "SMBIOS({model})",
-    "gui.op.smbios.revert" => "SMBIOS · Revert",
     "gui.op.uninstall.msix" => "Uninstall MSIX",
     "gui.op.uninstall.product" => "Uninstall Product",
     "gui.op.install" => "Install({path})",
@@ -600,7 +551,6 @@ tr_table!(tr_en, {
 
     // ── TUI 输入对话框 ──
     "tui.input.device" => "Device Spoof",
-    "tui.input.smbios" => "SMBIOS Spoof",
     "tui.input.title" => " Custom Model — {target_label} ",
 
     // ── TUI 状态 ──
@@ -609,9 +559,7 @@ tr_table!(tr_en, {
 
     // ── TUI 机型日志 ──
     "tui.log.model.set" => "Model set: {model}",
-    "tui.log.smbios.set" => "SMBIOS model set: {model}",
     "tui.log.model.switch" => "📱 Device model switched to: {code} [{name}]",
-    "tui.log.smbios.switch" => "📱 SMBIOS model switched to: {code} [{name}]",
     "tui.log.uninstall.fetch.error" => "✗ Failed to get uninstall info: {error}",
 
     // ── TUI 操作标签 ──
@@ -629,10 +577,6 @@ tr_table!(tr_en, {
     "tui.op.xiaoai.apply" => "Super XiaoAI · Apply",
     "tui.op.xiaoai.revert" => "Super XiaoAI · Revert",
     "tui.op.xiaoai.install" => "Super XiaoAI · Install and Inject",
-    "tui.op.smbios.apply" => "SMBIOS · Apply({model})",
-    "tui.op.smbios.revert" => "SMBIOS · Revert",
-    "tui.op.dualnic.diagnose" => "Dual NIC Diagnose",
-    "tui.op.dualnic.fix" => "Dual NIC Fix",
     "tui.op.uninstall.msix" => "Uninstall MiDrop Ext (MSIX)",
     "tui.op.uninstall.product" => "Uninstall MiPCManager / MiContinuity",
 

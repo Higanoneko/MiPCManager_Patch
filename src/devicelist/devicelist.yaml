@@ -1,0 +1,11 @@
+# 机型代号表 —— 机型数据的唯一来源。
+#
+# 新增机型：在 device_list 下追加一行 `  CODE: '机型名'`，重新编译即可，
+# CLI 默认机型、GUI / TUI 预置下拉列表会自动同步。
+# 顺序即界面展示顺序；第一项为默认机型。
+device_list:
+  TM2430: 'Redmi Book 14 (2027)'
+  TM2429: 'Redmi Book 16 (2027)'
+  TM2425: 'Redmi Book Pro 14 (2026)'
+  TM2424: 'Xiaomi Book Pro 14 (2026)'
+  TM2309: 'Redmi Book 16 (2024)'

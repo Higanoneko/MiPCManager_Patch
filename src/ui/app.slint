@@ -29,13 +29,15 @@ export component AppWindow inherits Window {
     in-out property <length> log-viewport-y: 0px;
     in-out property <bool> downloading: false;
     in-out property <bool> xiaoai-busy: false;
+    in-out property <bool> camera-supported: true;
     in-out property <bool> show-confirm: false;
     in-out property <string> confirm-desc;
     in-out property <string> url-input;
     in-out property <string> path-input;
     in-out property <string> xiaoai-url-input;
     in-out property <string> xiaoai-path-input;
-    in-out property <string> custom-model-input: "TM2425";
+    // 预填内容由 devicelist 首项在启动时注入
+    in-out property <string> custom-model-input: "";
     in-out property <[string]> model-presets;
     in-out property <[string]> model-codes;
     in-out property <int> model-idx: 0;
@@ -55,10 +57,6 @@ export component AppWindow inherits Window {
     callback apply-audio-wifi();
     callback apply-audio-lan();
     callback revert-audio();
-    callback diagnose-dual-nic();
-    callback fix-dual-nic();
-    callback apply-smbios(string);
-    callback revert-smbios();
     callback apply-xiaoai();
     callback revert-xiaoai();
     callback download-and-install(string);
@@ -269,6 +267,7 @@ export component AppWindow inherits Window {
 
                             HorizontalLayout {
                                 spacing: 10px;
+                                visible: root.camera-supported;
                                 Text {
                                     text: root.tr("patch.camera");
                                     vertical-alignment: center;
@@ -396,71 +395,6 @@ export component AppWindow inherits Window {
                                 }
                             }
 
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: root.tr("patch.dual-nic");
-                                    vertical-alignment: center;
-                                    min-width: 90px;
-                                    font-size: 16px;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Button {
-                                        height: 30px;
-                                        width: 80px;
-                                        text: root.tr("btn.diagnose");
-                                        enabled: root.full-features;
-                                        clicked => { root.diagnose-dual-nic(); }
-                                    }
-
-                                    Button {
-                                        height: 30px;
-                                        width: 80px;
-                                        primary: true;
-                                        text: root.tr("btn.fix");
-                                        enabled: root.full-features;
-                                        clicked => { root.fix-dual-nic(); }
-                                    }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: root.tr("patch.smbios");
-                                    vertical-alignment: center;
-                                    min-width: 90px;
-                                    font-size: 16px;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Button {
-                                        height: 30px;
-                                        width: 80px;
-                                        primary: true;
-                                        text: root.tr("btn.apply");
-                                        enabled: root.full-features;
-                                        clicked => {
-                                             if root.custom-mode {
-                                                 root.apply-smbios(root.custom-model-input);
-                                             } else {
-                                                 root.apply-smbios(root.model-codes[root.model-idx]);
-                                             }
-                                         }
-                                    }
-
-                                    Button {
-                                        height: 30px;
-                                        width: 80px;
-                                        text: root.tr("btn.revert");
-                                        enabled: root.full-features;
-                                        clicked => { root.revert-smbios(); }
-                                    }
-                                }
-                            }
                         }
                     }
 

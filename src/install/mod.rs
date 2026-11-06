@@ -18,6 +18,11 @@ pub const DEFAULT_XIAOAI_ROOT: &str = r"C:\Program Files\MI\XiaoaiAgent";
 /// 新版 HyperConnect 的原生互联 DLL 相对版本目录的子路径。
 pub const HYPERCONNECT_NATIVE_REL: &str = r"resources\native-interconnect\win32";
 
+/// 6.0 起各功能组件迁入的子目录（相对版本目录）。
+pub const MISMART_SHARE_REL: &str = "MiSmartShare";
+/// 组件目录迁移的起始版本（major, minor）。
+pub const MISMART_SHARE_MIN_VERSION: (u64, u64) = (6, 0);
+
 /// 探测安装根目录。
 pub fn find_install_root() -> Option<PathBuf> {
     find_product_root(DEFAULT_INSTALL_ROOT, "XiaomiPCManager")
@@ -37,17 +42,56 @@ pub fn find_xiaoai_root() -> Option<PathBuf> {
     find_product_root(DEFAULT_XIAOAI_ROOT, "XiaoaiAgent")
 }
 
-/// 版本目录下的原生互联运行目录（目标 DLL 所在目录）。
+/// 版本目录下的功能组件目录（`micont_rtm.dll` / 音频组件 / 设置页资源等所在目录）。
 ///
+/// - XiaomiPCManager ≥ 6.0：`<版本目录>\MiSmartShare`
 /// - 新版 HyperConnect 2.0：`<版本目录>\resources\native-interconnect\win32`
 /// - 旧版 PcContinuity / XiaomiPCManager：版本目录自身
-pub fn runtime_native_dir(version_dir: &Path) -> PathBuf {
+///
+/// 目录判定以版本目录名（如 `6.0.2.19`）的数值版本为准，不依赖目录是否已创建。
+pub fn component_dir(version_dir: &Path) -> PathBuf {
     let nested = version_dir.join(HYPERCONNECT_NATIVE_REL);
     if nested.is_dir() {
-        nested
+        return nested;
+    }
+    if is_v6_or_newer(version_dir) {
+        version_dir.join(MISMART_SHARE_REL)
     } else {
         version_dir.to_path_buf()
     }
+}
+
+/// 兼容旧名：原生互联 DLL 所在目录，语义同 [`component_dir`]。
+pub fn runtime_native_dir(version_dir: &Path) -> PathBuf {
+    component_dir(version_dir)
+}
+
+/// 从版本目录名解析版本号，例如 `C:\...\XiaomiPCManager\6.0.2.19` → `[6, 0, 2, 19]`。
+pub fn version_of_dir(version_dir: &Path) -> Option<Vec<u64>> {
+    version_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(parse_version)
+}
+
+/// 数值化比较版本号是否 ≥ `major.minor`（缺失的段按 0 处理）。
+pub fn version_at_least(parts: &[u64], major: u64, minor: u64) -> bool {
+    let head = (
+        parts.first().copied().unwrap_or(0),
+        parts.get(1).copied().unwrap_or(0),
+    );
+    head >= (major, minor)
+}
+
+/// 版本目录是否为 6.0 及以上（组件位于 `MiSmartShare` 的版本）。
+pub fn is_v6_or_newer(version_dir: &Path) -> bool {
+    version_of_dir(version_dir).is_some_and(|version| {
+        version_at_least(
+            &version,
+            MISMART_SHARE_MIN_VERSION.0,
+            MISMART_SHARE_MIN_VERSION.1,
+        )
+    })
 }
 
 fn find_product_root(default_root: &str, product_dir: &str) -> Option<PathBuf> {
@@ -89,8 +133,9 @@ pub fn latest_version_dir(root: &Path) -> Result<PathBuf> {
         .with_context(|| format!("在 {} 下未找到任何版本目录", root.display()))
 }
 
-/// 解析形如 `5.8.0.14` 的版本号为数字数组；非纯版本号返回 None。
-fn parse_version(s: &str) -> Option<Vec<u64>> {
+/// 解析形如 `5.8.0.14` / `6.0.2.19` 的版本号为数字数组；非纯版本号返回 None。
+pub fn parse_version(s: &str) -> Option<Vec<u64>> {
+    let s = s.trim();
     if s.is_empty() {
         return None;
     }
@@ -278,4 +323,58 @@ pub fn write_file_atomic(file: &Path, data: &[u8]) -> Result<()> {
     }
     fs::rename(&tmp, file).with_context(|| format!("替换文件失败 {}", file.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mipcm_install_{label}_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn version_comparison_uses_numeric_parts() {
+        assert_eq!(parse_version("6.0.2.19"), Some(vec![6, 0, 2, 19]));
+        assert_eq!(parse_version(" 5.8.0.95 "), Some(vec![5, 8, 0, 95]));
+        assert_eq!(parse_version("MiSmartShare"), None);
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("6.0.x"), None);
+
+        assert!(version_at_least(&[6, 0, 2, 19], 6, 0));
+        assert!(version_at_least(&[6], 6, 0));
+        assert!(version_at_least(&[6, 1], 6, 0));
+        assert!(version_at_least(&[10, 0, 1], 6, 0));
+        assert!(!version_at_least(&[5, 9, 9, 9], 6, 0));
+        assert!(!version_at_least(&[], 6, 0));
+    }
+
+    #[test]
+    fn v6_layout_is_detected_from_version_dir_name() {
+        let root = fixture_root("v6_detect");
+        let v6 = root.join("6.0.2.19");
+        let old = root.join("5.8.0.95");
+        fs::create_dir_all(&v6).unwrap();
+        fs::create_dir_all(&old).unwrap();
+
+        assert!(is_v6_or_newer(&v6));
+        assert!(!is_v6_or_newer(&old));
+        assert_eq!(component_dir(&v6), v6.join(MISMART_SHARE_REL));
+        assert_eq!(component_dir(&old), old);
+        assert_eq!(runtime_native_dir(&v6), v6.join(MISMART_SHARE_REL));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }

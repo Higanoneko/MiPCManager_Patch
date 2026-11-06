@@ -2,14 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use mipcmanager_patch::{
-    elevate,
-    experimental::{audio_dual_nic, smbios_spoof},
-    i18n,
-    install::pc_manager_installer,
-    ops,
-    patches::device as device_spoof,
-};
+use mipcmanager_patch::{devicelist, elevate, i18n, install::pc_manager_installer, ops};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -34,7 +27,7 @@ enum Command {
         #[arg(long, global = true)]
         no_registry: bool,
     },
-    /// 抑制「请确认摄像头状态」弹窗（PcControlCenter.dll）
+    /// 抑制「请确认摄像头状态」弹窗（PcControlCenter.dll，6.0 及以上版本不再需要）
     Camera {
         #[command(subcommand)]
         action: PatchAction,
@@ -53,11 +46,6 @@ enum Command {
     Device {
         #[command(subcommand)]
         action: DeviceAction,
-    },
-    /// [实验性] SMBIOS 设备身份伪装 — 妙播 / Lyra 特殊适配（micont_rtm.dll IAT Hook）
-    Smbios {
-        #[command(subcommand)]
-        action: SmbiosAction,
     },
     /// 安装小米电脑管家 / 小米互联（自动识别安装包所属产品）
     Install {
@@ -143,23 +131,14 @@ enum AudioAction {
         #[arg(long)]
         no_kill: bool,
     },
-    /// [实验性] 双网卡同网段音频修复：诊断并自动对齐 Wi-Fi 路由与广播模式
-    ExperimentalFix {
-        /// 仅诊断，不执行修复
-        #[arg(long)]
-        dry_run: bool,
-        /// 指定版本目录（默认自动探测）
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
 }
 
 #[derive(Subcommand, Clone)]
 enum DeviceAction {
     /// 应用设备伪装
     Apply {
-        /// 机型代号（默认 TM2425）
-        #[arg(long, default_value = device_spoof::DEFAULT_MODEL)]
+        /// 机型代号（默认取 devicelist.yaml 首项）
+        #[arg(long, default_value = devicelist::default_code())]
         model: String,
         /// 指定版本目录（默认自动探测）
         #[arg(long)]
@@ -171,28 +150,6 @@ enum DeviceAction {
     Revert {
         #[arg(long)]
         dir: Option<PathBuf>,
-        #[arg(long)]
-        no_kill: bool,
-    },
-}
-
-#[derive(Subcommand, Clone)]
-enum SmbiosAction {
-    /// 应用 SMBIOS 设备身份伪装
-    Apply {
-        /// 机型代号（默认 TM2425）
-        #[arg(long, default_value = smbios_spoof::DEFAULT_MODEL)]
-        model: String,
-        /// 指定目标 DLL 路径（默认自动探测安装目录）
-        #[arg(long)]
-        dll: Option<PathBuf>,
-        #[arg(long)]
-        no_kill: bool,
-    },
-    /// 还原 SMBIOS 设备身份伪装
-    Revert {
-        #[arg(long)]
-        dll: Option<PathBuf>,
         #[arg(long)]
         no_kill: bool,
     },
@@ -334,15 +291,6 @@ fn run(cmd: Command, lang: i18n::Lang) -> Result<()> {
                 print_log(ops::revert_audio(dir, no_kill)?);
                 Ok(())
             }
-            AudioAction::ExperimentalFix { dry_run, dir } => {
-                let dir = dir.map(Ok).unwrap_or_else(ops::resolve_full_version_dir)?;
-                if dry_run {
-                    print_log(audio_dual_nic::diagnose(&dir)?);
-                } else {
-                    print_log(audio_dual_nic::auto_fix(&dir)?);
-                }
-                Ok(())
-            }
         },
         Command::Device { action } => match action {
             DeviceAction::Apply {
@@ -355,20 +303,6 @@ fn run(cmd: Command, lang: i18n::Lang) -> Result<()> {
             }
             DeviceAction::Revert { dir, no_kill } => {
                 print_log(ops::revert_device(dir, no_kill)?);
-                Ok(())
-            }
-        },
-        Command::Smbios { action } => match action {
-            SmbiosAction::Apply {
-                model,
-                dll,
-                no_kill,
-            } => {
-                print_log(ops::apply_smbios(Some(&model), dll, no_kill)?);
-                Ok(())
-            }
-            SmbiosAction::Revert { dll, no_kill } => {
-                print_log(ops::revert_smbios(dll, no_kill)?);
                 Ok(())
             }
         },
@@ -605,5 +539,22 @@ mod install_routing_tests {
             ])
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod device_list_tests {
+    use super::*;
+
+    #[test]
+    fn device_apply_default_model_comes_from_device_list() {
+        let cli = Cli::try_parse_from(["MiPCM_CLI", "device", "apply"]).unwrap();
+        let Some(Command::Device {
+            action: DeviceAction::Apply { model, .. },
+        }) = cli.command
+        else {
+            panic!("expected device apply");
+        };
+        assert_eq!(model, devicelist::default_code());
     }
 }

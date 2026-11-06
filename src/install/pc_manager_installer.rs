@@ -232,9 +232,8 @@ pub fn launch_installer(installer: &Path) -> Result<u32> {
             temporary_existed,
         ));
     }
-    if let Err(error) =
-        crate::patches::device::ensure_spoof_model(crate::patches::device::DEFAULT_MODEL)
-    {
+    let default_model = crate::devicelist::default_code();
+    if let Err(error) = crate::patches::device::ensure_spoof_model(default_model) {
         let reg_error = error.context("无法写入 SpoofDevice 伪装机型");
         return Err(rollback_after_error(
             reg_error,

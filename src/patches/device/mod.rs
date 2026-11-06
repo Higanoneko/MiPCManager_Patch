@@ -12,29 +12,8 @@ const EMBEDDED_MSIMG32: &[u8] = include_bytes!("dlls/msimg32.dll");
 const REG_SUBKEY: &str = r"Software\SmartSharePatch";
 const REG_VALUE: &str = "SpoofDevice";
 
-/// 默认机型。
-pub const DEFAULT_MODEL: &str = "TM2425";
-
-/// 预置机型。
-pub struct ModelPreset {
-    pub code: &'static str,
-    pub name: &'static str,
-}
-
-pub const PRESETS: &[ModelPreset] = &[
-    ModelPreset {
-        code: "TM2425",
-        name: "Redmi Book Pro 14 (2026)",
-    },
-    ModelPreset {
-        code: "TM2424",
-        name: "Xiaomi Book Pro 14 (2026)",
-    },
-    ModelPreset {
-        code: "TM2309",
-        name: "Redmi Book 16 (2024)",
-    },
-];
+// 机型代号与名称由 `crate::devicelist` 的 devicelist.yaml 统一维护；
+// 本模块只负责写入用户选定（或自定义）的代号。
 
 /// 应用设备伪装：释放代理 DLL 到版本目录，并写入注册表机型。
 pub fn apply(version_dir: &Path, model: &str) -> Result<()> {

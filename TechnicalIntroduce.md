@@ -17,7 +17,7 @@
 
 工具自动探测 `XiaomiPCManager`、小米互联 / 互联互通（`PcContinuity` / `HyperConnect`）与超级小爱（`XiaoaiAgent`）的最新安装版本：
 
-- **XiaomiPCManager**（完整版）：位于 `C:\Program Files\MI\XiaomiPCManager`，支持所有补丁功能。工具启动时自动关闭其相关进程。
+- **XiaomiPCManager**（完整版）：位于 `C:\Program Files\MI\XiaomiPCManager`，支持所有补丁功能。工具启动时自动关闭其相关进程。工具截取版本目录名（如 `6.0.2.19`）并按数值判断版本：**≥ 6.0** 时各功能组件位于 `<版本目录>\MiSmartShare`，旧版组件直接在版本目录下；`msimg32.dll` 始终与 `XiaomiPCManager.exe` 同在版本目录。6.0 及以上版本不再需要摄像头弹窗补丁。
 - **PcContinuity**（小米互联）：位于 `C:\Program Files\MI\PcContinuity`，目前**仅支持地区伪装**。
 - **HyperConnect**（小米互联互通 2.0）：位于 `C:\Program Files\MI\HyperConnect`，原生互联 DLL 在版本目录下的 `resources\native-interconnect\win32` 子目录（`micont_rtm.dll`、`micont_service.exe` 等），同样**仅支持地区伪装**。
 - **XiaoaiAgent**（超级小爱）：位于 `C:\Program Files\MI\XiaoaiAgent`，工具从其子目录中选择版本号最高的目录，不对具体版本设置适配限制。
@@ -156,18 +156,22 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 **实现**：`msimg32.dll` 已通过 `include_bytes!` 内嵌进编译产物（`src/patches/device/dlls/msimg32.dll`），应用时直接释放到版本目录，无需附带文件；同时写入注册表机型代号。还原时删除该 DLL 并移除注册表项（若原目录本就存在同名文件，则在应用时备份、还原时恢复）。
 
-**预置机型**（亦可 `--model` 自定义任意代号）：
+**机型列表**（亦可 `--model` 自定义任意代号）：
 
-| 代号 | 机型 |
-|---|---|
-| `TM2425`（默认） | Redmi Book Pro 14 (2026) |
-| `TM2424` | Xiaomi Book Pro 14 (2026) |
-| `TM2309` | Redmi Book 16 (2024) |
+机型代号与名称统一维护在 [`src/devicelist/devicelist.yaml`](src/devicelist/devicelist.yaml)，`device_list` 下的每个键即一个机型代号：
+
+```yaml
+device_list:
+  TM2425: 'Redmi Book Pro 14 (2026)'
+  TM2424: 'Xiaomi Book Pro 14 (2026)'
+```
+
+新增机型只需在该层追加一行 `  CODE: '机型名'` 并重新编译，CLI 默认值、GUI / TUI 预置列表会自动同步；列表首项为默认机型。完整列表以该 yaml 为准。
 
 **命令行选项**：
-- `--model`：指定伪装机型，默认 `TM2425`
+- `--model`：指定伪装机型，默认取机型表首项
 
-代码：[`src/patches/device/mod.rs`](src/patches/device/mod.rs)
+代码：[`src/devicelist/mod.rs`](src/devicelist/mod.rs)（机型表解析）、[`src/patches/device/mod.rs`](src/patches/device/mod.rs)（代理 DLL 与注册表）
 
 > DLL 来源：@ChsBuffer
 
@@ -175,7 +179,9 @@ if (exception_id == CameraExceptionId.kLOCAL_CAMERA_DISABLED)
 
 安装入口仅在未检测到 `PcContinuity` 时可用（官方不允许两者同时安装）。工具优先扫描 Patcher 可执行文件同目录的 `*_XiaomiPCManager_*.exe`；找到一个时直接使用，找到多个时请用户选择。如未找到，则提示输入 HTTP(S) 网址或本地 `.exe` 路径。
 
-启动安装包前，工具会在安装包同目录临时准备 `msimg32.dll`，写入默认伪装机型，然后挂起启动安装器、注入代理并旁路系统版本与机型检查。安装器启动成功后，安装包目录中的临时文件会恢复为操作前的状态。
+启动安装包前，工具会在安装包同目录临时准备 `msimg32.dll`，写入默认伪装机型，然后挂起启动安装器、注入代理并旁路系统版本与机型检查。
+
+安装流程本身不会改动实机安装目录。安装完成后如需设备伪装，请单独执行「设备伪装」功能（见补丁五），由它把 `msimg32.dll` 释放到含 `XiaomiPCManager.exe` 的版本目录；该目录是主程序所在目录，与 6.0 起的 `<版本目录>\MiSmartShare` 组件目录不同。
 
 **URL 下载**：调用 Windows PowerShell `Invoke-WebRequest`，URL 通过子进程环境变量传入（不拼接到 PowerShell 脚本中）。下载先写入 `.download.tmp` 临时文件，成功后再重命名，避免保留不完整安装包。
 
@@ -265,7 +271,6 @@ src/
 │   ├── pc_manager_installer.rs  # 小米电脑管家安装
 │   └── xiaoai_installer.rs      # 超级小爱安装
 ├── uninstall/mod.rs             # MSIX 与产品卸载
-├── experimental/               # 实验性 SMBIOS 等功能
 ├── ui/
 │   ├── app.slint                # GUI 界面声明
 │   ├── gui/app.rs               # GUI 二进制入口与事件编排
