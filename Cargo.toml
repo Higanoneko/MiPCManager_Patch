@@ -32,7 +32,7 @@ ratatui = { version = "0.30", optional = true, default-features = false, feature
 crossterm = { version = "0.29", optional = true, default-features = false, features = ["events"] }
 
 # GUI (optional, gated by "gui" feature)
-slint = { version = "1.17", optional = true, default-features = false, features = ["backend-winit", "renderer-software", "compat-1-2"] }
+slint = { version = "1.18", optional = true, default-features = false, features = ["backend-winit", "renderer-software", "compat-1-2"] }
 rfd = { version = "0.17", optional = true }
 
 [target.'cfg(windows)'.dependencies]
@@ -53,8 +53,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [build-dependencies]
-embed-resource = "3.0.11"
-slint-build = "1.17"
+embed-resource = "3.0.12"
+slint-build = "1.18"
 
 [profile.release]
 strip = true
